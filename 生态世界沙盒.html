@@ -122,7 +122,7 @@ let eventLog=[], prevPop={forest:0,dwarf:0,nomad:0,marsh:0};
 let gameOver=false;
 const MAX_EVENTS=15;
 const RACE_IDX={forest:1,dwarf:2,nomad:3,marsh:4};
-const TERR_COL=['','#5bbf5a','#caa36a','#cf8a4a','#3fa07a'];
+const TERR_COL=['','#00e676','#ff9100','#ff1744','#00b0ff'];
 let power='rain', brushR=2, hoverI=-1, hoverJ=-1, painting=false;
 
 function biomeOf(e,m,t){
@@ -207,7 +207,7 @@ function initAgents(){
     }
   });
   updateHud();
-  computeTerritory(); renderTerritory();
+  terr.fill(0); renderTerritory();
 }
 function pickTarget(a){
   for(let k=0;k<10;k++){
@@ -227,7 +227,7 @@ const RACE_PARAMS={
   nomad: {r:0.022, maxAge:2400},
   marsh: {r:0.040, maxAge:2000},
 };
-const RACE_COL={ forest:'#5bbf5a', dwarf:'#caa36a', nomad:'#cf8a4a', marsh:'#3fa07a' };
+const RACE_COL={ forest:'#00e676', dwarf:'#ff9100', nomad:'#ff1744', marsh:'#00b0ff' };
 const ECO_INTERVAL=18;
 function spawnNear(a){
   for(let k=0;k<6;k++){
@@ -272,7 +272,7 @@ function ecoTick(){
   expansion();
   checkSettlements();
   cleanupSettlements();
-  computeTerritory();
+  decayTerritory();
   renderTerritory();
   updateHud();
   popHistory.push({frame, pop:{...pop}});
@@ -303,22 +303,53 @@ function flashMsg(t){
 }
 
 // ---------- 领地与扩张 ----------
-function computeTerritory(){
-  terr.fill(0);
+function decayTerritory(){
+  // 收集当前每个种族小人所在的格子
+  const has={forest:new Set(),dwarf:new Set(),nomad:new Set(),marsh:new Set()};
   for(const a of agents){
-    const i=Math.round(a.x), j=Math.round(a.y), ri=RACE_IDX[a.race];
-    for(let dj=-1;dj<=1;dj++)for(let di=-1;di<=1;di++){
-      const ni=i+di,nj=j+dj; if(ni<0||nj<0||ni>=W||nj>=H) continue;
-      terr[nj*W+ni]=ri;                       // 后写覆盖→接壤区归后者
+    const i=Math.round(a.x), j=Math.round(a.y);
+    has[a.race].add(j*W+i);
+  }
+  for(let j=0;j<H;j++)for(let i=0;i<W;i++){
+    const idx=j*W+i, v=terr[idx];
+    if(!v) continue;
+    const race=Object.keys(RACE_IDX).find(r=>RACE_IDX[r]===v);
+    if(has[race].has(idx)) continue; // 有同族小人，保持领地
+    // 四邻居都不是同族 → 被完全包围/隔离 → 置为无主
+    const up    = (j-1>=0) ? terr[(j-1)*W+i] : -1;
+    const down  = (j+1<H)  ? terr[(j+1)*W+i] : -1;
+    const left  = (i-1>=0) ? terr[j*W+(i-1)] : -1;
+    const right = (i+1<W)  ? terr[j*W+(i+1)] : -1;
+    if(up!==v && down!==v && left!==v && right!==v){
+      terr[idx]=0;
     }
   }
 }
 function renderTerritory(){
   const t=terrCv.getContext('2d'); t.clearRect(0,0,W*CELL,H*CELL);
+  // 1. 半透明填充（保留原有）
   t.globalAlpha=0.30;
   for(let j=0;j<H;j++)for(let i=0;i<W;i++){
     const v=terr[j*W+i]; if(!v) continue;
     t.fillStyle=TERR_COL[v]; t.fillRect(i*CELL,j*CELL,CELL,CELL);
+  }
+  // 2. 边界线高亮（新增）
+  t.globalAlpha=0.90;
+  t.lineWidth=2;
+  for(let j=0;j<H;j++)for(let i=0;i<W;i++){
+    const v=terr[j*W+i]; if(!v) continue;
+    const x=i*CELL, y=j*CELL;
+    const up    = (j-1>=0) ? terr[(j-1)*W+i] : 0;
+    const down  = (j+1<H)  ? terr[(j+1)*W+i] : 0;
+    const left  = (i-1>=0) ? terr[j*W+(i-1)] : 0;
+    const right = (i+1<W)  ? terr[j*W+(i+1)] : 0;
+    t.strokeStyle=TERR_COL[v];
+    t.beginPath();
+    if(!up    || up!==v)   { t.moveTo(x,y);       t.lineTo(x+CELL,y);       }
+    if(!down  || down!==v) { t.moveTo(x,y+CELL);  t.lineTo(x+CELL,y+CELL);  }
+    if(!left  || left!==v) { t.moveTo(x,y);       t.lineTo(x,y+CELL);       }
+    if(!right || right!==v){ t.moveTo(x+CELL,y);  t.lineTo(x+CELL,y+CELL);  }
+    t.stroke();
   }
   t.globalAlpha=1;
 }
@@ -616,31 +647,31 @@ function drawAgent(ctx,a){
   ctx.save(); ctx.translate(x,y); ctx.scale(a.facing,1);
   const R=(rx,ry,rw,rh,c)=>{ ctx.fillStyle=c; ctx.fillRect(rx,ry,rw,rh); };
   switch(a.race){
-    case 'forest':{ const lc='#3f7d3a';
+    case 'forest':{ const lc='#00c853';
       R(-3,-3-(step===0?1:0),2,3,lc); R(1,-3-(step===1?1:0),2,3,lc);
-      R(-3,-8+bob,6,5,'#5bbf5a');                 // 身
-      R(-2,-12+bob,4,4,'#7fd98a');                // 头
-      R(-3,-12+bob,1,2,'#7fd98a'); R(2,-12+bob,1,2,'#7fd98a'); // 尖耳
-      R(-1,-13+bob,2,1,'#2e7d32'); break; }       // 叶冠
-    case 'dwarf':{ const lc='#3a4a6a';
+      R(-3,-8+bob,6,5,'#00e676');                 // 身
+      R(-2,-12+bob,4,4,'#69f0ae');                // 头
+      R(-3,-12+bob,1,2,'#69f0ae'); R(2,-12+bob,1,2,'#69f0ae'); // 尖耳
+      R(-1,-13+bob,2,1,'#00b248'); break; }       // 叶冠
+    case 'dwarf':{ const lc='#e65100';
       R(-3,-2-(step===0?1:0),2,2,lc); R(1,-2-(step===1?1:0),2,2,lc);
-      R(-4,-6+bob,8,4,'#b9863a');                 // 宽身
-      R(-3,-9+bob,6,3,'#caa36a');                 // 大头
-      R(-3,-9+bob,6,1,'#34507a');                 // 矿盔
-      R(-3,-7+bob,6,1,'#7a5a2a'); break; }        // 大胡
-    case 'nomad':{ const mc='#9c6b3a';
+      R(-4,-6+bob,8,4,'#ff9100');                 // 宽身
+      R(-3,-9+bob,6,3,'#ffab40');                 // 大头
+      R(-3,-9+bob,6,1,'#bf360c');                 // 矿盔
+      R(-3,-7+bob,6,1,'#ff6d00'); break; }        // 大胡
+    case 'nomad':{ const mc='#d50000';
       R(-5,-3-(step===0?1:0),1.6,3,mc); R(-2,-3-(step===1?1:0),1.6,3,mc);
       R(2,-3-(step===1?1:0),1.6,3,mc);  R(4,-3-(step===0?1:0),1.6,3,mc);
       R(-6,-6+bob,12,3,mc);                       // 马身
       R(-7,-6+bob,2,2,mc);                        // 马尾(后)
-      R(-1,-10+bob,3,4,'#caa36a');                // 人上身
-      R(-1,-12+bob,2,2,'#caa36a'); break; }       // 头
-    case 'marsh':{ const bc='#3fa07a';
-      R(-3,-2-(step===0?1:0),2,2,'#2e7d5a'); R(1,-2-(step===1?1:0),2,2,'#2e7d5a');
+      R(-1,-10+bob,3,4,'#ff5252');                // 人上身
+      R(-1,-12+bob,2,2,'#ff5252'); break; }       // 头
+    case 'marsh':{ const bc='#00b0ff';
+      R(-3,-2-(step===0?1:0),2,2,'#0091ea'); R(1,-2-(step===1?1:0),2,2,'#0091ea');
       R(-7,-4+bob,4,2,bc);                        // 尾(后)
       R(-3,-5+bob,6,3,bc);                        // 身
       R(2,-5+bob,3,2,bc);                         // 头(前)
-      R(4,-5+bob,2,1,'#357f5f'); break; }         // 长吻
+      R(4,-5+bob,2,1,'#01579b'); break; }         // 长吻
   }
   if(a.plague>0){ ctx.fillStyle='#d23b30'; ctx.fillRect(-1,-15,2,2); }  // 瘟疫标记
   if(a.hunger>70){ ctx.fillStyle='#e0b020'; ctx.fillRect(2,-13,1.5,1.5); } // 饥饿标记
@@ -680,6 +711,12 @@ function tick(){
       const dx=a.tx-a.x, dy=a.ty-a.y, dist=Math.hypot(dx,dy);
       if(dist<0.4){ a.moving=false; a.rest=30+Math.random()*90; pickTarget(a); }
       else { a.x+=dx/dist*sp; a.y+=dy/dist*sp; a.facing=dx>=0?1:-1; a.moving=true; }
+      // 实时标记领地（持久化，异族覆盖）
+      const ai=Math.round(a.x), aj=Math.round(a.y), ri=RACE_IDX[a.race];
+      for(let tj=-1;tj<=1;tj++)for(let ti=-1;ti<=1;ti++){
+        const ni=ai+ti,nj=aj+tj; if(ni<0||nj<0||ni>=W||nj>=H) continue;
+        terr[nj*W+ni]=ri;
+      }
     }
     if(frame%10===0) combatTick();             // 接壤交战
     if(frame%ECO_INTERVAL===0) ecoTick();      // 人口动态：繁殖/死亡/瘟疫
@@ -693,7 +730,7 @@ function buildLegend(){
   const items=[
     ['#3f7d3a','森林'],['#8fb84e','草原'],['#46604a','沼泽'],['#857f78','山地'],
     ['#d7b76a','荒漠'],['#e6ecf1','雪原'],['#2c5f93','海'],['#3f93cf','河流'],
-    ['#5bbf5a','▣ 精灵'],['#caa36a','▣ 矮人'],['#9c6b3a','▣ 人马'],['#3fa07a','▣ 鳄鱼'],['#e8eaf0','🏠 聚落'],
+    ['#00e676','▣ 精灵'],['#ff9100','▣ 矮人'],['#ff1744','▣ 人马'],['#00b0ff','▣ 鳄鱼'],['#e8eaf0','🏠 聚落'],
   ];
   items.forEach(([c,n])=>{ const d=document.createElement('div'); d.className='lg';
     d.innerHTML=`<span class="sw" style="background:${c}"></span>${n}`; wrap.appendChild(d); });
