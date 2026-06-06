@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>生态世界沙盒 · 地图 + 小人</title>
+<style>
+  :root{ --bg:#14161c; --card:#1e212b; --line:#2c3140; --txt:#e8eaf0; --sub:#9aa0b0; --red:#ff2442; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--txt);
+    font-family:"PingFang SC","Microsoft YaHei",sans-serif; padding:24px; }
+  h1{ font-size:22px; margin:0 0 4px; } h1 span{ color:var(--red); }
+  .desc{ color:var(--sub); font-size:13px; margin-bottom:16px; }
+  .controls{ display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:12px 16px; margin-bottom:16px; }
+  button,select{ background:#2a2f3d; color:var(--txt); border:1px solid var(--line);
+    border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer; }
+  button:hover{ border-color:var(--red); }
+  button.primary{ background:var(--red); border-color:var(--red); font-weight:600; }
+  label{ font-size:13px; color:var(--sub); display:flex; align-items:center; gap:6px; }
+  #world{ display:block; image-rendering:pixelated; border:1px solid var(--line);
+    border-radius:10px; max-width:100%; cursor:crosshair; }
+  .pw.active{ background:var(--red); border-color:var(--red); font-weight:600; }
+  .legend{ display:flex; flex-wrap:wrap; gap:10px 18px; margin-top:14px;
+    background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 16px; font-size:12px; color:var(--sub); }
+  .lg{ display:flex; align-items:center; gap:6px; }
+  .sw{ width:12px; height:12px; border-radius:3px; border:1px solid #0006; }
+</style>
+</head>
+<body>
+  <h1>生态世界沙盒 · <span>地图 + 小人</span></h1>
+  <div class="desc">程序化地图打底，四族小人按 biome 分布并自主游走：精灵在森林、矮人在山地、人马在草原、鳄鱼在沼泽。</div>
+
+  <div class="controls">
+    <button class="primary" id="regen">🌍 重建世界</button>
+    <label>地图类型
+      <select id="mapType">
+        <option value="continent">大陆</option>
+        <option value="islands">群岛</option>
+        <option value="basin">盆地/内海</option>
+        <option value="pangaea">超大陆</option>
+      </select>
+    </label>
+    <label>每族数量 <input type="range" id="count" min="4" max="30" value="14"><span id="countVal">14</span></label>
+    <label>速度 <input type="range" id="speed" min="1" max="6" value="3"><span id="speedVal">3</span></label>
+    <label><input type="checkbox" id="rivers" checked> 河流</label>
+    <label><input type="checkbox" id="terr" checked> 领地</label>
+    <label><input type="checkbox" id="pause"> 暂停</label>
+  </div>
+
+  <div class="controls">
+    <span style="color:var(--sub);font-size:13px;">神力 ✋</span>
+    <button class="pw" data-p="rain">🌧️ 降雨</button>
+    <button class="pw" data-p="raise">⛰️ 升地</button>
+    <button class="pw" data-p="water">🌊 挖水</button>
+    <button class="pw" data-p="forest">🌲 造林</button>
+    <button class="pw" data-p="plague">🦠 瘟疫</button>
+    <button class="pw" data-p="meteor">☄️ 灾祸</button>
+    <label>笔刷 <input type="range" id="brush" min="1" max="6" value="2"><span id="brushVal">2</span></label>
+  </div>
+
+  <div id="hud" style="font-size:13px;color:var(--sub);margin-bottom:10px;"></div>
+  <div style="display:flex;gap:12px;align-items:flex-start;">
+    <div id="eventLog" style="flex:0 0 auto;width:200px;height:702px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;overflow-y:auto;font-size:12px;color:var(--sub);">
+      <div style="font-weight:600;color:var(--txt);margin-bottom:8px;font-size:13px;">📜 世界事件</div>
+      <div id="eventList"></div>
+    </div>
+    <div style="position:relative;flex:0 0 auto;">
+      <canvas id="world"></canvas>
+      <div id="msg" style="position:absolute;left:12px;top:12px;background:#000a;color:#fff;
+        padding:6px 12px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .4s;
+        pointer-events:none;"></div>
+    </div>
+    <div id="chartWrap" style="flex:0 0 auto;">
+      <canvas id="chart" style="display:block;border:1px solid var(--line);border-radius:10px;background:var(--card);"></canvas>
+    </div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;justify-content:center;align-items:center;">
+    <div style="background:var(--card);border:1px solid var(--line);border-radius:16px;padding:32px;max-width:420px;text-align:center;">
+      <h2 id="modalTitle" style="margin:0 0 12px;font-size:22px;"></h2>
+      <p id="modalBody" style="color:var(--sub);font-size:14px;line-height:1.6;margin:0 0 20px;"></p>
+      <div id="modalStats" style="margin-bottom:20px;font-size:13px;"></div>
+      <button id="modalRestart" class="primary" style="padding:10px 24px;">🔄 再来一局</button>
+    </div>
+  </div>
+
+<script>
+function ihash(x,y,s){
+  let h=Math.imul(x|0,374761393)+Math.imul(y|0,668265263)+Math.imul(s|0,1442695041);
+  h=Math.imul(h^(h>>>13),1274126177);
+  return ((h^(h>>>16))>>>0)/4294967296;
+}
+function vnoise(x,y,s){
+  const x0=Math.floor(x),y0=Math.floor(y),fx=x-x0,fy=y-y0;
+  const a=ihash(x0,y0,s),b=ihash(x0+1,y0,s),c=ihash(x0,y0+1,s),d=ihash(x0+1,y0+1,s);
+  const sx=fx*fx*(3-2*fx),sy=fy*fy*(3-2*fy);
+  return a+(b-a)*sx+(c-a)*sy+(a-b-c+d)*sx*sy;
+}
+function fbm(x,y,s){ let amp=0.5,f=1,sum=0; for(let o=0;o<5;o++){ sum+=amp*vnoise(x*f,y*f,s+o*131); amp*=0.5; f*=2; } return sum; }
+
+const BIO={
+  DEEPSEA:'#13314e', SEA:'#2c5f93', BEACH:'#d9cd8f', DESERT:'#d7b76a',
+  GRASS:'#8fb84e', PLAIN:'#a8c062', FOREST:'#3f7d3a', SWAMP:'#46604a',
+  HILL:'#9a8f76', MOUNT:'#857f78', ROCK:'#6c6862', SNOW:'#e6ecf1', RIVER:'#3f93cf', VOLCANO:'#a83a2c'
+};
+// 四族适宜栖息 biome
+const HAB={ forest:['FOREST','PLAIN'], dwarf:['MOUNT','HILL'], nomad:['GRASS','PLAIN'], marsh:['SWAMP','BEACH'] };
+const RACE_NAME={ forest:'精灵(森林族)', dwarf:'矮人(矮人族)', nomad:'人马(游牧族)', marsh:'鳄鱼(沼泽族)' };
+
+const W=96, H=54, CELL=13;
+let seed=Math.floor(Math.random()*1e9);
+let elev=[], moist=[], temp=[], biome=[], river=[], agents=[], frame=0;
+const bg=document.createElement('canvas'); bg.width=W*CELL; bg.height=H*CELL;
+const terrCv=document.createElement('canvas'); terrCv.width=W*CELL; terrCv.height=H*CELL;
+let terr=new Array(W*H).fill(0), settlements=[], popHistory=[];
+const MAX_HIST=300;
+let eventLog=[], prevPop={forest:0,dwarf:0,nomad:0,marsh:0};
+let gameOver=false;
+const MAX_EVENTS=15;
+const RACE_IDX={forest:1,dwarf:2,nomad:3,marsh:4};
+const TERR_COL=['','#5bbf5a','#caa36a','#cf8a4a','#3fa07a'];
+let power='rain', brushR=2, hoverI=-1, hoverJ=-1, painting=false;
+
+function biomeOf(e,m,t){
+  if(e<0.34) return 'DEEPSEA';
+  if(e<0.40) return 'SEA';
+  if(e<0.435) return 'BEACH';
+  if(e>0.90) return t<0.32?'SNOW':'ROCK';
+  if(e>0.78) return 'MOUNT';
+  if(e>0.70) return 'HILL';
+  if(t<0.26) return 'SNOW';
+  if(e<0.50 && m>0.66) return 'SWAMP';
+  if(m<0.24) return 'DESERT';
+  if(m<0.46) return 'GRASS';
+  if(m<0.68) return 'PLAIN';
+  return 'FOREST';
+}
+function generate(){
+  const mapType=document.getElementById('mapType').value;
+  elev=[];moist=[];temp=[];biome=[];river=new Array(W*H).fill(0);
+  for(let j=0;j<H;j++) for(let i=0;i<W;i++){
+    const nx=i/W*4.2, ny=j/H*4.2;
+    let e=fbm(nx,ny,seed);
+    const m=Math.max(0,Math.min(1,fbm(nx+11,ny+7,seed+777)));
+    const dx=i/W-0.5,dy=j/H-0.5,d=Math.min(1,Math.sqrt(dx*dx+dy*dy)*1.6);
+    if(mapType==='continent') e=e-d*0.55+0.12;
+    else if(mapType==='islands') e=e*1.15-0.22;
+    else if(mapType==='basin') e=e+(d-0.5)*0.55;
+    else if(mapType==='pangaea') e=e-d*0.30+0.18;
+    e=Math.max(0,Math.min(1,e));
+    let t=Math.max(0,Math.min(1,1-Math.abs(j/H-0.5)*1.45-e*0.35));
+    const idx=j*W+i; elev[idx]=e;moist[idx]=m;temp[idx]=t;biome[idx]=biomeOf(e,m,t);
+  }
+  if(document.getElementById('rivers').checked){
+    let rs=Math.floor(W*H/700)+6;
+    let i,j,guard=0;
+    while(rs>0 && guard++<2000){
+      i=Math.floor(Math.random()*W); j=Math.floor(Math.random()*H);
+      if(elev[j*W+i]<0.62) continue;
+      for(let step=0;step<220;step++){
+        const idx=j*W+i; if(elev[idx]<0.40) break; river[idx]=1;
+        let bi=i,bj=j,be=elev[idx];
+        for(let dj=-1;dj<=1;dj++)for(let di=-1;di<=1;di++){
+          const ni=i+di,nj=j+dj; if(ni<0||nj<0||ni>=W||nj>=H)continue;
+          const e=elev[nj*W+ni]; if(e<be){be=e;bi=ni;bj=nj;}
+        }
+        if(bi===i&&bj===j) break; i=bi;j=bj;
+      }
+      rs--;
+    }
+  }
+  renderBg();
+}
+function shade(hex,f){ const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  return `rgb(${Math.round(r*f)},${Math.round(g*f)},${Math.round(b*f)})`; }
+function renderBg(){
+  const b=bg.getContext('2d'); b.imageSmoothingEnabled=false;
+  for(let j=0;j<H;j++)for(let i=0;i<W;i++){
+    const idx=j*W+i;
+    let col = river[idx] ? BIO.RIVER : shade(BIO[biome[idx]], 0.82+elev[idx]*0.28);
+    b.fillStyle=col; b.fillRect(i*CELL,j*CELL,CELL,CELL);
+  }
+}
+
+let KCAP={};
+function newAgent(race,i,j){
+  return {race, seed:Math.floor(Math.random()*1000), x:i+0.5, y:j+0.5,
+    homeI:i, homeJ:j, tx:i+0.5, ty:j+0.5, facing:1, moving:false, rest:Math.random()*80,
+    age:Math.random()*800, hunger:0, plague:0, fight:0};
+}
+function initAgents(){
+  const count=+document.getElementById('count').value;
+  agents=[]; KCAP={}; settlements=[]; popHistory=[]; eventLog=[]; prevPop={forest:0,dwarf:0,nomad:0,marsh:0}; gameOver=false; renderEventLog();
+  Object.keys(HAB).forEach(race=>{
+    const tiles=[];
+    for(let j=0;j<H;j++)for(let i=0;i<W;i++){ const idx=j*W+i;
+      if(!river[idx] && HAB[race].includes(biome[idx])) tiles.push([i,j]); }
+    KCAP[race]=Math.max(4, Math.floor(tiles.length*0.5));   // 栖息地承载力 K
+    const n=Math.min(count, tiles.length);
+    for(let k=0;k<n;k++){
+      const [i,j]=tiles[Math.floor(Math.random()*tiles.length)];
+      agents.push(newAgent(race,i,j));
+    }
+  });
+  updateHud();
+  computeTerritory(); renderTerritory();
+}
+function pickTarget(a){
+  for(let k=0;k<10;k++){
+    const ti=a.homeI+Math.floor((Math.random()-0.5)*18);
+    const tj=a.homeJ+Math.floor((Math.random()-0.5)*18);
+    if(ti<1||tj<1||ti>=W-1||tj>=H-1) continue;
+    const b=biome[tj*W+ti];
+    if(!river[tj*W+ti] && HAB[a.race].includes(b)){ a.tx=ti+0.5; a.ty=tj+0.5; return; }
+  }
+  a.tx=a.homeI+0.5; a.ty=a.homeJ+0.5;
+}
+
+// ---------- 人口动态 ----------
+const RACE_PARAMS={
+  forest:{r:0.030, maxAge:2600},
+  dwarf: {r:0.016, maxAge:3200},
+  nomad: {r:0.022, maxAge:2400},
+  marsh: {r:0.040, maxAge:2000},
+};
+const RACE_COL={ forest:'#5bbf5a', dwarf:'#caa36a', nomad:'#cf8a4a', marsh:'#3fa07a' };
+const ECO_INTERVAL=18;
+function spawnNear(a){
+  for(let k=0;k<6;k++){
+    const i=Math.round(a.x)+Math.floor((Math.random()-0.5)*6);
+    const j=Math.round(a.y)+Math.floor((Math.random()-0.5)*6);
+    if(i<1||j<1||i>=W-1||j>=H-1) continue;
+    const idx=j*W+i;
+    if(!river[idx] && HAB[a.race].includes(biome[idx])) return newAgent(a.race,i,j);
+  }
+  return null;
+}
+function ecoTick(){
+  const pop={forest:0,dwarf:0,nomad:0,marsh:0};
+  for(const a of agents) pop[a.race]++;
+  const TOTAL_CAP=650, newborns=[];
+  for(let idx=agents.length-1; idx>=0; idx--){
+    const a=agents[idx]; a.age+=ECO_INTERVAL;
+    const P=RACE_PARAMS[a.race], K=KCAP[a.race]||10, n=pop[a.race];
+    const load=n/K;
+    a.hunger=Math.max(0, Math.min(100, a.hunger + (load>1 ? (load-1)*35 : -12)));  // 过载饥饿
+    let die=false;
+    if(a.age>P.maxAge && Math.random()<0.45) die=true;                  // 年老
+    if(a.hunger>80 && Math.random()<(a.hunger-80)/20*0.25) die=true;    // 饥饿
+    if(a.plague>0){ a.plague--; if(Math.random()<0.10) die=true; }      // 瘟疫
+    if(Math.random()<0.0015) die=true;                                   // 自然
+    if(die){ agents.splice(idx,1); pop[a.race]--; continue; }
+    if(n<K && a.hunger<45 && agents.length+newborns.length<TOTAL_CAP){   // 繁殖(Logistic)
+      let settleBonus=1;
+      for(const s of settlements){
+        if(s.race===a.race && Math.hypot(a.x-s.i-0.5,a.y-s.j-0.5)<4){
+          settleBonus=1+0.12*s.level; break;
+        }
+      }
+      const rEff=P.r*(1-n/K)*settleBonus;
+      if(rEff>0 && Math.random()<rEff*ECO_INTERVAL*0.14){
+        const baby=spawnNear(a); if(baby){ newborns.push(baby); pop[a.race]++; }
+      }
+    }
+  }
+  if(newborns.length) agents.push(...newborns);
+  maybePlague();
+  expansion();
+  checkSettlements();
+  cleanupSettlements();
+  computeTerritory();
+  renderTerritory();
+  updateHud();
+  popHistory.push({frame, pop:{...pop}});
+  if(popHistory.length>MAX_HIST) popHistory.shift();
+  checkVictory();
+  drawChart();
+}
+function maybePlague(){
+  if(Math.random()<0.005){
+    const races=Object.keys(HAB), race=races[Math.floor(Math.random()*races.length)];
+    let inf=0;
+    for(const a of agents) if(a.race===race && a.plague<=0 && Math.random()<0.45){ a.plague=8; inf++; }
+    if(inf>2){ flashMsg('⚠️ '+RACE_NAME[race]+' 爆发瘟疫！感染 '+inf+' 人'); pushEvent('warning',RACE_NAME[race]+' 爆发瘟疫，感染 '+inf+' 人'); }
+  }
+}
+function updateHud(){
+  const pop={forest:0,dwarf:0,nomad:0,marsh:0};
+  for(const a of agents) pop[a.race]++;
+  const sc={forest:0,dwarf:0,nomad:0,marsh:0};
+  for(const s of settlements) sc[s.race]++;
+  document.getElementById('hud').innerHTML='总人口 <b>'+agents.length+'</b> ｜ '+
+    Object.keys(pop).map(r=>`<span style="color:${RACE_COL[r]}">${RACE_NAME[r]} ${pop[r]}/${KCAP[r]||'-'} 🏠${sc[r]}</span>`).join(' · ');
+}
+let msgTimer=null;
+function flashMsg(t){
+  const m=document.getElementById('msg'); m.textContent=t; m.style.opacity=1;
+  clearTimeout(msgTimer); msgTimer=setTimeout(()=>{ m.style.opacity=0; }, 2600);
+}
+
+// ---------- 领地与扩张 ----------
+function computeTerritory(){
+  terr.fill(0);
+  for(const a of agents){
+    const i=Math.round(a.x), j=Math.round(a.y), ri=RACE_IDX[a.race];
+    for(let dj=-1;dj<=1;dj++)for(let di=-1;di<=1;di++){
+      const ni=i+di,nj=j+dj; if(ni<0||nj<0||ni>=W||nj>=H) continue;
+      terr[nj*W+ni]=ri;                       // 后写覆盖→接壤区归后者
+    }
+  }
+}
+function renderTerritory(){
+  const t=terrCv.getContext('2d'); t.clearRect(0,0,W*CELL,H*CELL);
+  t.globalAlpha=0.30;
+  for(let j=0;j<H;j++)for(let i=0;i<W;i++){
+    const v=terr[j*W+i]; if(!v) continue;
+    t.fillStyle=TERR_COL[v]; t.fillRect(i*CELL,j*CELL,CELL,CELL);
+  }
+  t.globalAlpha=1;
+}
+function findFrontier(race){                   // 找未被本族占据的适宜新地
+  const ri=RACE_IDX[race];
+  for(let k=0;k<30;k++){
+    const i=1+Math.floor(Math.random()*(W-2)), j=1+Math.floor(Math.random()*(H-2));
+    const idx=j*W+i;
+    if(river[idx] || !HAB[race].includes(biome[idx]) || terr[idx]===ri) continue;
+    return {i,j};
+  }
+  return null;
+}
+function expansion(){                           // 人口压力→派开拓者
+  const pop={forest:0,dwarf:0,nomad:0,marsh:0};
+  for(const a of agents) pop[a.race]++;
+  Object.keys(HAB).forEach(race=>{
+    const K=KCAP[race]||10, n=pop[race];
+    if(n>6 && n/K>0.8){                         // 高压触发扩张
+      const list=agents.filter(a=>a.race===race);
+      const pio=list[Math.floor(Math.random()*list.length)];
+      const t=findFrontier(race);
+      if(pio && t){ pio.homeI=t.i; pio.homeJ=t.j; pio.tx=t.i+0.5; pio.ty=t.j+0.5; pio.rest=0; }
+    }
+  });
+}
+
+// ---------- 侵略 / 战争 ----------
+const STR={ forest:1.0, dwarf:1.5, nomad:1.2, marsh:0.8 };   // 各族战力
+function combatTick(){
+  const grid=new Map();
+  for(const a of agents){ const k=Math.round(a.x)+'_'+Math.round(a.y);
+    let l=grid.get(k); if(!l){ l=[]; grid.set(k,l); } l.push(a); }
+  const dead=new Set(); let kills=0;
+  for(const a of agents){
+    if(dead.has(a)) continue;
+    const ci=Math.round(a.x), cj=Math.round(a.y);
+    let done=false;
+    for(let dj=-1;dj<=1 && !done;dj++)for(let di=-1;di<=1 && !done;di++){
+      const l=grid.get((ci+di)+'_'+(cj+dj)); if(!l) continue;
+      for(const b of l){
+        if(b===a||dead.has(b)||b.race===a.race) continue;
+        if(Math.hypot(a.x-b.x,a.y-b.y)<1.1 && Math.random()<0.35){
+          a.fight=8; b.fight=8;
+          const sa=STR[a.race]*(0.5+Math.random()), sb=STR[b.race]*(0.5+Math.random());
+          if(sa>=sb) dead.add(b); else dead.add(a);
+          // 聚落战损
+          for(const st of settlements){
+            const dx=(st.i+0.5)-a.x, dy=(st.j+0.5)-a.y;
+            if(dx*dx+dy*dy<2.5){
+              const winner=sa>=sb?a:b;
+              if(winner.race!==st.race){
+                st.hp-=35+Math.floor(Math.random()*30);
+                if(st.hp<=0){ flashMsg('💥 '+RACE_NAME[st.race]+' 的聚落被攻陷！'); pushEvent('warning',RACE_NAME[st.race]+' 的聚落被攻陷'); }
+              }
+            }
+          }
+          kills++; done=true; break;
+        }
+      }
+    }
+  }
+  if(dead.size){ agents=agents.filter(x=>!dead.has(x)); }
+  if(kills>=4){ flashMsg('⚔️ 领地交战！'+kills+' 人阵亡'); pushEvent('warning','领地交战，'+kills+' 人阵亡'); }
+}
+
+// ---------- 聚落系统 ----------
+const SETTLE_CD=12; let settleTick=0;
+function checkSettlements(){
+  settleTick++;
+  if(settleTick<SETTLE_CD) return;
+  settleTick=0;
+  const gridPop=new Map();
+  for(const a of agents){
+    const ki=Math.round(a.x), kj=Math.round(a.y);
+    const key=ki+'_'+kj+'_'+a.race;
+    gridPop.set(key,(gridPop.get(key)||0)+1);
+  }
+  for(const [key,cnt] of gridPop){
+    if(cnt<5) continue;
+    const p=key.split('_'), i=+p[0],j=+p[1],race=p[2];
+    const idx=j*W+i;
+    if(river[idx] || !HAB[race].includes(biome[idx])) continue;
+    let exists=false, tooClose=false;
+    for(const s of settlements){
+      if(s.i===i && s.j===j){ exists=true; break; }
+      if(s.race===race && Math.hypot(s.i-i,s.j-j)<5){ tooClose=true; break; }
+    }
+    if(exists || tooClose) continue;
+    settlements.push({i,j,race,age:0,pop:cnt,level:1,hp:100});
+    flashMsg('🏠 '+RACE_NAME[race]+' 建立了新聚落！');
+    pushEvent('normal',RACE_NAME[race]+' 建立了新聚落');
+  }
+  for(const s of settlements){
+    const oldLevel=s.level;
+    let near=0;
+    for(const a of agents) if(a.race===s.race && Math.hypot(a.x-s.i-0.5,a.y-s.j-0.5)<4) near++;
+    s.pop=near;
+    if(near>=18) s.level=3;
+    else if(near>=9) s.level=2;
+    else s.level=1;
+    if(s.level>oldLevel){
+      pushEvent('milestone',RACE_NAME[s.race]+' 聚落升至 '+s.level+' 级');
+    }
+  }
+}
+function cleanupSettlements(){
+  settlements=settlements.filter(s=>s.hp>0);
+}
+function drawSettlement(ctx,s){
+  const x=s.i*CELL, y=s.j*CELL;
+  const c=RACE_COL[s.race];
+  ctx.save(); ctx.translate(x,y);
+  const roof=shade(c,0.72);
+  if(s.level===1){
+    ctx.fillStyle=c; ctx.fillRect(3,6,7,4);
+    ctx.fillStyle=roof; ctx.beginPath(); ctx.moveTo(1,6); ctx.lineTo(6.5,2); ctx.lineTo(12,6); ctx.fill();
+  }else if(s.level===2){
+    ctx.fillStyle=c; ctx.fillRect(2,4,9,6);
+    ctx.fillStyle=roof; ctx.beginPath(); ctx.moveTo(0,4); ctx.lineTo(6.5,0); ctx.lineTo(13,4); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.fillRect(10,-4,1,7); ctx.fillStyle=c; ctx.fillRect(11,-4,3,2);
+  }else{
+    ctx.fillStyle=shade(c,0.55); ctx.fillRect(0,3,13,8);
+    ctx.fillStyle=c; ctx.fillRect(2,0,9,6);
+    ctx.fillRect(0,0,3,5); ctx.fillRect(10,0,3,5);
+    ctx.fillStyle='#fff'; ctx.fillRect(6,-6,1,6); ctx.fillStyle='#ff2442'; ctx.fillRect(7,-6,4,3);
+  }
+  if(s.hp<60){ ctx.fillStyle='rgba(255,36,66,0.35)'; ctx.fillRect(0,0,CELL,CELL); }
+  ctx.restore();
+}
+
+function drawChart(){
+  const cv=document.getElementById('chart'); if(!cv) return;
+  const CW=300, CH=H*CELL, r=window.devicePixelRatio||1;
+  if(cv.width!==CW*r){ cv.width=CW*r; cv.height=CH*r; cv.style.width=CW+'px'; cv.style.height=CH+'px'; }
+  const c=cv.getContext('2d');
+  c.setTransform(r,0,0,r,0,0);
+  c.clearRect(0,0,CW,CH);
+  const pad={top:14,right:46,bottom:30,left:46};
+  const gw=CW-pad.left-pad.right, gh=CH-pad.top-pad.bottom;
+  if(popHistory.length<2) return;
+  let maxP=650;
+  for(const h of popHistory){
+    const total=h.pop.forest+h.pop.dwarf+h.pop.nomad+h.pop.marsh;
+    if(total>maxP) maxP=total;
+  }
+  maxP=Math.ceil(maxP/50)*50;
+  // 网格
+  c.strokeStyle='rgba(150,160,180,0.12)';
+  c.lineWidth=1;
+  c.fillStyle='var(--sub)';
+  c.font='11px sans-serif';
+  c.textAlign='right'; c.textBaseline='middle';
+  for(let i=0;i<=5;i++){
+    const y=pad.top+gh*(i/5);
+    c.beginPath(); c.moveTo(pad.left,y); c.lineTo(pad.left+gw,y); c.stroke();
+    c.fillText(''+Math.round(maxP*(1-i/5)),pad.left-8,y);
+  }
+  // 折线 + 末端标签
+  const races=['forest','dwarf','nomad','marsh'];
+  races.forEach(race=>{
+    c.strokeStyle=RACE_COL[race]; c.lineWidth=2.5; c.lineJoin='round';
+    c.beginPath();
+    for(let i=0;i<popHistory.length;i++){
+      const h=popHistory[i], x=pad.left+(i/(MAX_HIST-1))*gw, y=pad.top+gh*(1-h.pop[race]/maxP);
+      if(i===0) c.moveTo(x,y); else c.lineTo(x,y);
+    }
+    c.stroke();
+    // 末端标签（深色底防止重叠）
+    const last=popHistory[popHistory.length-1];
+    const lx=pad.left+((popHistory.length-1)/(MAX_HIST-1))*gw;
+    const ly=pad.top+gh*(1-last.pop[race]/maxP);
+    const tw=c.measureText(last.pop[race]+'').width;
+    c.fillStyle='rgba(30,33,43,0.9)'; c.fillRect(lx+2,ly-8,tw+8,16);
+    c.fillStyle=RACE_COL[race]; c.font='bold 12px sans-serif'; c.textAlign='left'; c.textBaseline='middle';
+    c.fillText(last.pop[race],lx+6,ly);
+  });
+  c.fillStyle='var(--sub)'; c.font='11px sans-serif'; c.textAlign='center'; c.textBaseline='top';
+  c.fillText('实时人口趋势',pad.left+gw/2,pad.top+gh+12);
+}
+
+// ---------- 事件流与胜负判定 ----------
+function pushEvent(type,text){
+  const sec=Math.floor(frame/60);
+  const m=Math.floor(sec/60), s=sec%60;
+  const ts=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;
+  eventLog.unshift({type,text,ts});
+  if(eventLog.length>MAX_EVENTS) eventLog.pop();
+  renderEventLog();
+}
+function renderEventLog(){
+  const el=document.getElementById('eventList'); if(!el) return;
+  const colors={normal:'#9aa0b0', warning:'#e0b020', milestone:'#4fc3f7', end:'#ff2442'};
+  const icons={normal:'•', warning:'⚠', milestone:'★', end:'◆'};
+  el.innerHTML=eventLog.map(e=>`<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--line);line-height:1.45;">
+    <div style="color:#6a7080;font-size:11px;margin-bottom:1px;">${e.ts}</div>
+    <div style="color:${colors[e.type]||colors.normal};font-weight:${e.type==='end'?'600':'400'};">${icons[e.type]||'•'} ${e.text}</div>
+  </div>`).join('');
+}
+function checkVictory(){
+  if(gameOver) return;
+  const pop={forest:0,dwarf:0,nomad:0,marsh:0};
+  for(const a of agents) pop[a.race]++;
+  // 灭绝检查（只记录事件，不结束游戏）
+  for(const race of Object.keys(HAB)){
+    if(pop[race]===0 && prevPop[race]>0){
+      pushEvent('end',RACE_NAME[race]+' 已灭绝');
+    }
+  }
+  // 只剩一个种族 → 胜利
+  const aliveRaces=Object.keys(HAB).filter(r=>pop[r]>0);
+  if(aliveRaces.length===1){
+    const winner=aliveRaces[0];
+    pushEvent('end',RACE_NAME[winner]+' 统一了世界！');
+    showGameOver(winner,pop);
+    return;
+  }
+  // 里程碑
+  for(const race of Object.keys(HAB)){
+    if(pop[race]>=100 && prevPop[race]<100){
+      pushEvent('milestone',RACE_NAME[race]+' 人口突破 100');
+    }
+  }
+  prevPop={...pop};
+}
+function showGameOver(race,pop){
+  gameOver=true;
+  document.getElementById('pause').checked=true;
+  const modal=document.getElementById('modal');
+  const title=document.getElementById('modalTitle');
+  const body=document.getElementById('modalBody');
+  const stats=document.getElementById('modalStats');
+  title.textContent='🏆 世界统一';
+  title.style.color=RACE_COL[race];
+  body.textContent=RACE_NAME[race]+' 在残酷的生存竞争中淘汰了所有对手，成为世界的唯一主宰。';
+  const total=agents.length;
+  stats.innerHTML='<div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">'+
+    '<div>⏱ 存活帧数 <b>'+frame+'</b></div>'+
+    '<div>👥 剩余人口 <b>'+total+'</b></div>'+
+    '<div>🏠 聚落总数 <b>'+settlements.length+'</b></div>'+
+    '</div><div style="margin-top:10px;color:var(--sub);">'+
+    '精灵 '+pop.forest+' · 矮人 '+pop.dwarf+' · 人马 '+pop.nomad+' · 鳄鱼 '+pop.marsh+
+    '</div>';
+  modal.style.display='flex';
+}
+
+// ---------- 玩家神力 ----------
+function recalc(i,j){ const idx=j*W+i, e=elev[idx];
+  temp[idx]=Math.max(0,Math.min(1,1-Math.abs(j/H-0.5)*1.45-e*0.35));
+  biome[idx]=biomeOf(e,moist[idx],temp[idx]); }
+function forEachTile(ci,cj,R,fn){
+  for(let dj=-R;dj<=R;dj++)for(let di=-R;di<=R;di++){
+    if(di*di+dj*dj>R*R) continue;
+    const i=ci+di,j=cj+dj; if(i<0||j<0||i>=W||j>=H) continue; fn(i,j);
+  }
+}
+function applyPower(ci,cj){
+  if(ci<0||cj<0||ci>=W||cj>=H) return;
+  const R=brushR;
+  if(power==='rain'){
+    forEachTile(ci,cj,R,(i,j)=>{ const idx=j*W+i; moist[idx]=Math.min(1,moist[idx]+0.4); recalc(i,j); }); renderBg();
+  } else if(power==='raise'){
+    forEachTile(ci,cj,R,(i,j)=>{ const idx=j*W+i; elev[idx]=Math.min(1,elev[idx]+0.2); river[idx]=0; recalc(i,j); }); renderBg();
+  } else if(power==='water'){
+    forEachTile(ci,cj,R,(i,j)=>{ const idx=j*W+i; elev[idx]=Math.max(0,elev[idx]-0.2); river[idx]=0; recalc(i,j); }); renderBg();
+  } else if(power==='forest'){
+    forEachTile(ci,cj,R,(i,j)=>{ const idx=j*W+i; moist[idx]=Math.min(1,moist[idx]+0.25);
+      if(elev[idx]>0.44&&elev[idx]<0.70) biome[idx]='FOREST'; else recalc(i,j); }); renderBg();
+  } else if(power==='plague'){
+    let n=0; for(const a of agents){ if(Math.hypot(a.x-ci-0.5,a.y-cj-0.5)<=R+1){ a.plague=8; n++; } }
+    if(n) flashMsg('🦠 你降下瘟疫，感染 '+n+' 人');
+  } else if(power==='meteor'){
+    let before=agents.length;
+    agents=agents.filter(a=>Math.hypot(a.x-ci-0.5,a.y-cj-0.5)>R);
+    const n=before-agents.length;
+    forEachTile(ci,cj,R,(i,j)=>{ const idx=j*W+i; elev[idx]=Math.min(1,elev[idx]+0.15); biome[idx]='VOLCANO'; });
+    // 摧毁聚落
+    for(let si=0;si<settlements.length;si++){
+      const s=settlements[si];
+      if((s.i-ci)*(s.i-ci)+(s.j-cj)*(s.j-cj)<=R*R){
+        flashMsg('☄️ '+RACE_NAME[s.race]+' 的聚落被灾祸夷平！');
+        pushEvent('warning',RACE_NAME[s.race]+' 的聚落被灾祸夷平');
+        settlements.splice(si,1); si--;
+      }
+    }
+    renderBg(); if(n){ flashMsg('☄️ 天降灾祸，'+n+' 人罹难'); pushEvent('warning','天降灾祸，'+n+' 人罹难'); }
+  }
+}
+
+// ---------- 简化动态小人 ----------
+function drawAgent(ctx,a){
+  const x=a.x*CELL, y=a.y*CELL;
+  const step = a.moving ? (Math.floor(frame/6)+a.seed)%2 : 0;
+  const bob = a.moving ? (step?-1:0) : 0;
+  ctx.save(); ctx.translate(x,y); ctx.scale(a.facing,1);
+  const R=(rx,ry,rw,rh,c)=>{ ctx.fillStyle=c; ctx.fillRect(rx,ry,rw,rh); };
+  switch(a.race){
+    case 'forest':{ const lc='#3f7d3a';
+      R(-3,-3-(step===0?1:0),2,3,lc); R(1,-3-(step===1?1:0),2,3,lc);
+      R(-3,-8+bob,6,5,'#5bbf5a');                 // 身
+      R(-2,-12+bob,4,4,'#7fd98a');                // 头
+      R(-3,-12+bob,1,2,'#7fd98a'); R(2,-12+bob,1,2,'#7fd98a'); // 尖耳
+      R(-1,-13+bob,2,1,'#2e7d32'); break; }       // 叶冠
+    case 'dwarf':{ const lc='#3a4a6a';
+      R(-3,-2-(step===0?1:0),2,2,lc); R(1,-2-(step===1?1:0),2,2,lc);
+      R(-4,-6+bob,8,4,'#b9863a');                 // 宽身
+      R(-3,-9+bob,6,3,'#caa36a');                 // 大头
+      R(-3,-9+bob,6,1,'#34507a');                 // 矿盔
+      R(-3,-7+bob,6,1,'#7a5a2a'); break; }        // 大胡
+    case 'nomad':{ const mc='#9c6b3a';
+      R(-5,-3-(step===0?1:0),1.6,3,mc); R(-2,-3-(step===1?1:0),1.6,3,mc);
+      R(2,-3-(step===1?1:0),1.6,3,mc);  R(4,-3-(step===0?1:0),1.6,3,mc);
+      R(-6,-6+bob,12,3,mc);                       // 马身
+      R(-7,-6+bob,2,2,mc);                        // 马尾(后)
+      R(-1,-10+bob,3,4,'#caa36a');                // 人上身
+      R(-1,-12+bob,2,2,'#caa36a'); break; }       // 头
+    case 'marsh':{ const bc='#3fa07a';
+      R(-3,-2-(step===0?1:0),2,2,'#2e7d5a'); R(1,-2-(step===1?1:0),2,2,'#2e7d5a');
+      R(-7,-4+bob,4,2,bc);                        // 尾(后)
+      R(-3,-5+bob,6,3,bc);                        // 身
+      R(2,-5+bob,3,2,bc);                         // 头(前)
+      R(4,-5+bob,2,1,'#357f5f'); break; }         // 长吻
+  }
+  if(a.plague>0){ ctx.fillStyle='#d23b30'; ctx.fillRect(-1,-15,2,2); }  // 瘟疫标记
+  if(a.hunger>70){ ctx.fillStyle='#e0b020'; ctx.fillRect(2,-13,1.5,1.5); } // 饥饿标记
+  if(a.fight>0){ ctx.fillStyle='#ff3b30'; ctx.fillRect(-2,-16,4,2);        // 交战火花
+    ctx.fillStyle='#ffd24a'; ctx.fillRect(0,-17,1.5,1.5); }
+  ctx.restore();
+}
+
+let ctx;
+function draw(){
+  const cv=document.getElementById('world');
+  const dpr=window.devicePixelRatio||1;
+  if(cv.width!==W*CELL*dpr){
+    cv.width=W*CELL*dpr; cv.height=H*CELL*dpr;
+    cv.style.width=(W*CELL)+'px'; cv.style.height=(H*CELL)+'px';
+    ctx=cv.getContext('2d'); ctx.scale(dpr,dpr); ctx.imageSmoothingEnabled=false;
+  }
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(bg,0,0,W*CELL,H*CELL);
+  if(document.getElementById('terr').checked) ctx.drawImage(terrCv,0,0,W*CELL,H*CELL);
+  for(const s of settlements) drawSettlement(ctx,s);
+  agents.sort((a,b)=>a.y-b.y);                    // 远近遮挡
+  agents.forEach(a=>drawAgent(ctx,a));
+  if(hoverI>=0 && hoverI<W){                       // 神力笔刷光标
+    ctx.strokeStyle='rgba(255,255,255,0.75)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc((hoverI+0.5)*CELL,(hoverJ+0.5)*CELL,(brushR+0.5)*CELL,0,Math.PI*2); ctx.stroke();
+  }
+}
+function tick(){
+  const paused=document.getElementById('pause').checked;
+  const sp=(+document.getElementById('speed').value)*0.018;
+  if(!paused){
+    frame++;
+    for(const a of agents){
+      if(a.fight>0) a.fight--;
+      if(a.rest>0){ a.rest--; a.moving=false; continue; }
+      const dx=a.tx-a.x, dy=a.ty-a.y, dist=Math.hypot(dx,dy);
+      if(dist<0.4){ a.moving=false; a.rest=30+Math.random()*90; pickTarget(a); }
+      else { a.x+=dx/dist*sp; a.y+=dy/dist*sp; a.facing=dx>=0?1:-1; a.moving=true; }
+    }
+    if(frame%10===0) combatTick();             // 接壤交战
+    if(frame%ECO_INTERVAL===0) ecoTick();      // 人口动态：繁殖/死亡/瘟疫
+  }
+  draw();
+  requestAnimationFrame(tick);
+}
+
+function buildLegend(){
+  const wrap=document.getElementById('legend'); wrap.innerHTML='';
+  const items=[
+    ['#3f7d3a','森林'],['#8fb84e','草原'],['#46604a','沼泽'],['#857f78','山地'],
+    ['#d7b76a','荒漠'],['#e6ecf1','雪原'],['#2c5f93','海'],['#3f93cf','河流'],
+    ['#5bbf5a','▣ 精灵'],['#caa36a','▣ 矮人'],['#9c6b3a','▣ 人马'],['#3fa07a','▣ 鳄鱼'],['#e8eaf0','🏠 聚落'],
+  ];
+  items.forEach(([c,n])=>{ const d=document.createElement('div'); d.className='lg';
+    d.innerHTML=`<span class="sw" style="background:${c}"></span>${n}`; wrap.appendChild(d); });
+}
+
+function rebuild(){ generate(); initAgents(); }
+document.getElementById('regen').onclick=()=>{ seed=Math.floor(Math.random()*1e9); rebuild(); };
+document.getElementById('mapType').onchange=rebuild;
+document.getElementById('rivers').onchange=rebuild;
+document.getElementById('count').oninput=function(){ document.getElementById('countVal').textContent=this.value; initAgents(); };
+document.getElementById('speed').oninput=function(){ document.getElementById('speedVal').textContent=this.value; };
+// 神力工具栏
+document.querySelectorAll('.pw').forEach(b=>{ b.onclick=()=>{ power=b.dataset.p;
+  document.querySelectorAll('.pw').forEach(x=>x.classList.remove('active')); b.classList.add('active'); }; });
+document.querySelector('.pw').classList.add('active');
+document.getElementById('brush').oninput=function(){ brushR=+this.value; document.getElementById('brushVal').textContent=this.value; };
+// 鼠标神力
+const wc=document.getElementById('world');
+function evtTile(e){ const r=wc.getBoundingClientRect();
+  return [Math.floor((e.clientX-r.left)/r.width*W), Math.floor((e.clientY-r.top)/r.height*H)]; }
+wc.addEventListener('mousedown', e=>{ painting=true; const[i,j]=evtTile(e); applyPower(i,j); });
+wc.addEventListener('mousemove', e=>{ const[i,j]=evtTile(e); hoverI=i; hoverJ=j; if(painting) applyPower(i,j); });
+window.addEventListener('mouseup', ()=>{ painting=false; });
+wc.addEventListener('mouseleave', ()=>{ hoverI=-1; });
+
+buildLegend(); rebuild(); tick();
+
+document.getElementById('modalRestart').onclick=()=>{
+  document.getElementById('modal').style.display='none';
+  gameOver=false;
+  prevPop={forest:0,dwarf:0,nomad:0,marsh:0};
+  eventLog=[];
+  renderEventLog();
+  seed=Math.floor(Math.random()*1e9);
+  rebuild();
+};
+</script>
+
+</body>
+</html>

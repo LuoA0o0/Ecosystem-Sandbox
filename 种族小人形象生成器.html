@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>种族小人形象生成器 · 像素风(行走帧)</title>
+<style>
+  :root{ --bg:#14161c; --card:#1e212b; --line:#2c3140; --txt:#e8eaf0; --sub:#9aa0b0; --red:#ff2442; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--txt);
+    font-family:"PingFang SC","Microsoft YaHei",sans-serif; padding:24px; }
+  h1{ font-size:22px; margin:0 0 4px; } h1 span{ color:var(--red); }
+  .desc{ color:var(--sub); font-size:13px; margin-bottom:18px; }
+  .controls{ display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:12px 16px; margin-bottom:20px; }
+  button,select{ background:#2a2f3d; color:var(--txt); border:1px solid var(--line);
+    border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer; }
+  button:hover{ border-color:var(--red); }
+  button.primary{ background:var(--red); border-color:var(--red); font-weight:600; }
+  label{ font-size:13px; color:var(--sub); display:flex; align-items:center; gap:6px; }
+  .race-block{ background:var(--card); border:1px solid var(--line);
+    border-radius:14px; padding:16px; margin-bottom:18px; }
+  .race-head{ display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
+  .race-name{ font-size:17px; font-weight:700; }
+  .race-tag{ font-size:12px; color:var(--sub); }
+  .row{ display:flex; flex-wrap:wrap; gap:6px; }
+  .pawn canvas{ width:104px; height:132px; display:block; image-rendering:pixelated;
+    background:linear-gradient(180deg,#222735 0%, #191c25 70%, #14202a 100%);
+    border-radius:10px; border:1px solid var(--line); }
+  .pawn .id{ text-align:center; font-size:10px; color:var(--sub); margin-top:3px; }
+  .legend{ color:var(--sub); font-size:12px; margin-top:8px; line-height:1.6; }
+</style>
+</head>
+<body>
+  <h1>种族小人形象生成器 · <span>像素风 · 行走帧</span></h1>
+  <div class="desc">更大像素网格 + 腿部交替行走帧。锚点图谱 + 调色变异 + 状态叠加 + 待机/行走动作。</div>
+
+  <div class="controls">
+    <button class="primary" id="regen">🎲 重新随机</button>
+    <button id="exportAll">📥 导出全部</button>
+    <label>动作
+      <select id="motion">
+        <option value="idle">待机</option>
+        <option value="walk">行走</option>
+        <option value="run">跑步</option>
+        <option value="attack">攻击</option>
+        <option value="die">死亡</option>
+      </select>
+    </label>
+    <label>状态叠加
+      <select id="state">
+        <option value="normal">正常</option>
+        <option value="happy">健康/愉悦</option>
+        <option value="hungry">饥饿</option>
+        <option value="old">年老</option>
+        <option value="sick">感染瘟疫</option>
+      </select>
+    </label>
+    <label>朝向(待机)
+      <select id="facing">
+        <option value="random">随机</option>
+        <option value="right">朝右</option>
+        <option value="left">朝左</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="anim" checked> 动画</label>
+    <label>每族数量
+      <input type="range" id="count" min="4" max="12" value="8"><span id="countVal">8</span>
+    </label>
+  </div>
+
+  <div id="stage"></div>
+
+  <div class="legend">
+    锚点原型：森林族＝<b>精灵</b>(尖耳·叶冠·修长高挑) · 矮人族＝<b>矮人</b>(大胡·矿盔·矮小敦实) · 游牧族＝<b>人马</b>(上人下马·四蹄对角步) · 沼泽族＝<b>鳄鱼</b>(长吻利齿·背刺·拖尾)。<br>
+    动作：待机(呼吸/眨眼/尾摆) · 行走(腿臂交替+踱步) · 跑步(更快更大幅度+前压) · 攻击(挥臂出击+冲击特效) · 死亡(绕脚底倒地+灵魂飘出)。状态：饥饿暗淡/年老白发拄杖/感染绿斑冒泡/愉悦腮红。<br>
+    导出：点「📥 导出全部」存当前整屏为一张 PNG；<b>点击任意小人</b>可单独导出该小人(4×放大、透明背景)。
+  </div>
+
+<script>
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0;
+  let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t;
+  return ((t^t>>>14)>>>0)/4294967296; }; }
+const HSL=(h,s,l,al=1)=>`hsla(${(h%360+360)%360},${Math.max(0,Math.min(100,s))}%,${Math.max(0,Math.min(100,l))}%,${al})`;
+
+// 字母：D描边 S皮肤 s皮肤暗 L高光/肚 H发/胡 C衣 c衣暗 A强调 B第二色(马身/尾) E眼 W白牙 F左腿 G右腿
+const FOREST=[   // 精灵 W15 · 修长高挑
+"     A A A     ",
+"     AAAAA     ",
+"      HHH      ",
+"     HHHHH     ",
+"    HHHHHHH    ",
+"   SHHHHHHHS   ",
+"   SHHHHHHHS   ",
+"    SSSSSSS    ",
+"    SSSSSSS    ",
+"    SESSSES    ",
+"    SSSSSSS    ",
+"     sSSSs     ",
+"      SSS      ",
+"    CCCCCCC    ",
+"   CCCCCCCCC   ",
+"   CCAAAAACC   ",
+"  JCCCCCCCCCK  ",
+"  JCcCCCCCcCK  ",
+"   CCCCCCCCC   ",
+"    CCCCCCC    ",
+"    CC   CC    ",
+"     F   G     ",
+"     F   G     ",
+"     F   G     ",
+"     F   G     ",
+"    FF   GG    ",
+];
+const DWARF=[   // 矮人 W13 · 矮小敦实
+"   DDDDDDD   ",
+"   DCCCCCD   ",
+"   DCCACCD   ",
+"   SSSSSSS   ",
+"   SESSSES   ",
+"   sHHHHHs   ",
+"   HHHHHHH   ",
+"  HHHHHHHHH  ",
+"   HHHHHHH   ",
+"  CCCCCCCCC  ",
+" JCCCCCCCCCK ",
+" JCCAAAAACCK ",
+"  CcCCCCCcC  ",
+"  CCCCCCCCC  ",
+"   CC   CC   ",
+"    F   G    ",
+"   FF   GG   ",
+];
+const NOMAD=[   // 人马 W20 · 上人下马·四蹄
+"        HHH         ",
+"       HHHHH        ",
+"       SSSSS        ",
+"       SESES        ",
+"       SSSSS        ",
+"        SSS         ",
+"      CCCCCCC       ",
+"     JCCCCCCCK      ",
+"      CCCCCCC       ",
+"    BBBBBBBBBBBB    ",
+"   BBBBBBBBBBBBBB   ",
+"  BBBBBBBBBBBBBBBB  ",
+"  BBBBBBBBBBBBBBBBB ",
+"  BBBBBBBBBBBBBBBB  ",
+"   BBBBBBBBBBBBBB   ",
+"    F  G    G  F    ",
+"    F  G    G  F    ",
+"    F  G    G  F    ",
+];
+const MARSH=[   // 鳄鱼 W18 · 长吻利齿·背刺·拖尾
+"     A A A A      ",
+"    SSSSSSS       ",
+"    SSSSSSS       ",
+"    SSSSSSSSSSSWWW ",
+"    SESSSSSSSSSSWW ",
+"    SSSSSSS       ",
+"   ASSSSSSSA      ",
+"   CCCCCCCCC      ",
+"BBBCCCCCCCCC      ",
+"BB CLLLLLLLC      ",
+"  JCCCCCCCCCK     ",
+"   CCCCCCCCC      ",
+"    CC   CC       ",
+"     F   G        ",
+"    FF   GG       ",
+];
+
+const RACES = {
+  forest:{ name:'森林族', tag:'精灵 · 尖耳叶冠 · 修长高挑', pat:FOREST, leg:'S',
+    skin:[110,30,62], hair:[105,45,28], cloth:[34,42,42], accent:[95,60,45], second:[30,40,40] },
+  dwarf:{ name:'矮人族', tag:'矮人 · 大胡矿盔 · 矮小敦实', pat:DWARF, leg:'c',
+    skin:[28,40,62], hair:[18,38,30], cloth:[210,16,46], accent:[48,90,56], second:[210,16,40] },
+  nomad:{ name:'游牧族', tag:'人马 · 上人下马 · 四蹄对角步', pat:NOMAD, leg:'B',
+    skin:[28,45,58], hair:[20,35,24], cloth:[14,58,46], accent:[44,55,52], second:[28,44,38] },
+  marsh:{ name:'沼泽族', tag:'鳄鱼 · 长吻利齿 · 背刺拖尾', pat:MARSH, leg:'S',
+    skin:[112,42,42], hair:[150,20,25], cloth:[150,35,30], accent:[120,55,26], second:[112,42,40], belly:[70,45,60] },
+};
+
+function norm(p){ const w=Math.max(...p.map(s=>s.length)); return p.map(s=>s.padEnd(w,' ')); }
+
+function buildPalette(R, rng, state){
+  let sh=R.skin[0]+(rng()-0.5)*16, ss=R.skin[1]+(rng()-0.5)*10, sl=R.skin[2]+(rng()-0.5)*12;
+  let ch=R.cloth[0]+(rng()-0.5)*30, cs=R.cloth[1], cl=R.cloth[2]+(rng()-0.5)*8;
+  let hair=HSL(R.hair[0],R.hair[1],R.hair[2]);
+  if(state==='hungry'){ ss-=14; sl-=8; cs-=10; }
+  if(state==='old'){ hair='#dadada'; }
+  if(state==='sick'){ ss-=8; sh-=6; }
+  const belly = R.belly ? HSL(R.belly[0],R.belly[1],R.belly[2]) : HSL(sh,ss,Math.min(85,sl+14));
+  return {
+    'D':'#181a1f',
+    'S':HSL(sh,ss,sl), 's':HSL(sh,ss,sl-12), 'L':belly,
+    'H':hair,
+    'C':HSL(ch,cs,cl), 'c':HSL(ch,cs,cl-10),
+    'A':HSL(R.accent[0],R.accent[1],R.accent[2]),
+    'B':HSL(R.second[0],R.second[1],R.second[2]),
+    'E':'#0e1116', 'W':'#f2f2ea'
+  };
+}
+
+const PX = 4;
+function drawPixelPawn(canvas, raceKey, seed, state, facing, clock, motion){
+  const dpr=window.devicePixelRatio||1, cw=104, ch=132;
+  canvas.width=cw*dpr; canvas.height=ch*dpr;
+  const ctx=canvas.getContext('2d'); ctx.scale(dpr,dpr);
+  ctx.imageSmoothingEnabled=false; ctx.clearRect(0,0,cw,ch);
+  const R=RACES[raceKey], rng=mulberry32(seed), pal=buildPalette(R,rng,state);
+  const pat=norm(R.pat), gh=pat.length, gw=pat[0].length;
+  const phase=seed%997;
+
+  // ---- 动作参数 ----
+  let baseOx=Math.round((cw-gw*PX)/2), drawFacing=facing, stepP=0;
+  let legAmp=1, armAmp=1, bodyDy=0, attackPush=0, rootRot=0, rootAlpha=1, soul=-1;
+  const moving=(motion==='walk'||motion==='run'), run=(motion==='run');
+  const attack=(motion==='attack'), die=(motion==='die');
+
+  if(moving){
+    const period= run?1700:3400, tt=((clock+phase*7)%period)/period;
+    const tri = tt<0.5 ? tt*2 : (1-tt)*2;
+    const span=Math.max(0,(cw-gw*PX)-6);
+    baseOx=3+Math.round(tri*span);
+    drawFacing = tt<0.5 ? 1 : -1;                  // 朝向跟随移动方向
+    stepP=Math.floor(clock/(run?70:120))%2;        // 步相(跑步更快)
+    legAmp=run?2:1; armAmp=run?2:1; bodyDy=run?1:0; // 跑步幅度更大+前压
+  } else if(attack){
+    const aper=620, ap=((clock+phase*3)%aper)/aper;
+    attackPush = ap<0.25 ? -1 : (ap<0.45 ? 3 : (ap<0.6 ? 1 : 0)); // 蓄力→猛推→收回
+  } else if(die){
+    const dper=2800, dp=((clock+phase*5)%dper)/dper;
+    const fall = dp<0.5 ? dp/0.5 : (dp<0.9 ? 1 : 1-(dp-0.9)/0.1);  // 倒下→躺→起身
+    rootRot = fall*Math.PI/2;
+    rootAlpha = (dp>=0.5 && dp<0.9) ? 0.72 : 1;
+    if(dp>=0.5 && dp<0.9) soul=(dp-0.5)/0.4;       // 灵魂飘出
+  }
+
+  ctx.save();
+  ctx.globalAlpha=rootAlpha;
+  const groundY=ch-7;
+  if(die && rootRot){                               // 绕脚底旋转倒地
+    const pvx=baseOx+gw*PX/2, pvy=groundY;
+    ctx.translate(pvx,pvy); ctx.rotate(rootRot); ctx.translate(-pvx,-pvy);
+  } else if(drawFacing===-1){
+    ctx.translate(cw,0); ctx.scale(-1,1);
+  }
+  const ox=baseOx, oy=groundY-gh*PX;
+  const P=(gx,gy,color)=>{ ctx.fillStyle=color; ctx.fillRect(ox+gx*PX, oy+gy*PX, PX, PX); };
+
+  const breathe = (motion==='idle') ? ((Math.floor(clock/340+phase)%2)===1 ? 1 : 0) : 0;
+  const breatheLine=Math.floor(gh*0.45);
+  const blink=((Math.floor(clock/160)+(seed%9))%26===0);
+  const wagIdle=(Math.floor(clock/260+phase)%2)===1 ? 1 : 0;
+  const legColor=pal[R.leg||'S'];
+  const bodyBob = moving ? (stepP ? -1 : 0) : 0;
+
+  for(let y=0;y<gh;y++) for(let x=0;x<gw;x++){
+    let c=pat[y][x];
+    if(c==='E' && blink && !die) c='S';
+    let col = (c==='F'||c==='G') ? legColor
+            : (c==='J'||c==='K') ? pal['S']
+            : pal[c];
+    if(!col) continue;
+    let xx=x, yy=y;
+    if(moving){
+      if(c==='F') yy=(stepP===0)?y-legAmp:y;            // 腿交替抬落
+      else if(c==='G') yy=(stepP===1)?y-legAmp:y;
+      else if(c==='J') yy=y+(stepP===1?-armAmp:armAmp); // 手臂反相摆动
+      else if(c==='K') yy=y+(stepP===0?-armAmp:armAmp);
+      else yy=y+bodyDy+bodyBob;                          // 身体起伏(跑步前压)
+    } else if(attack){
+      if(c==='J'||c==='K'){ xx=x+attackPush; if(attackPush>1) yy=y-1; } // 挥臂出击
+      else xx=x+Math.round(attackPush*0.3);              // 身体前冲
+    } else if(die){
+      /* 旋转已处理，像素保持原位 */
+    } else {
+      if(y<breatheLine) yy=y+breathe;                     // 呼吸
+      if(c==='B' && x>gw-3) yy=yy+wagIdle;                // 尾摆(待机)
+    }
+    P(xx,yy,col);
+  }
+
+  if(attack && attackPush>=3){                            // 攻击冲击特效
+    const fx=gw, fy=Math.floor(gh*0.4);
+    P(fx,fy,pal['A']); P(fx,fy-1,pal['A']); P(fx-1,fy,HSL(48,90,70));
+  }
+  if(die && soul>=0){                                     // 死亡灵魂上升
+    const sy=-Math.floor(soul*6);
+    P(Math.floor(gw/2), sy, HSL(190,30,85,0.85));
+    P(Math.floor(gw/2)+1, sy-1, HSL(190,30,92,0.6));
+  }
+
+  if(state==='normal' && rng()<0.4){ P(2, Math.floor(gh*0.25)+breathe, pal['s']); }
+  if(state==='happy'){
+    const fr=Math.floor(gh*0.22)+breathe;
+    P(2,fr,HSL(350,70,68)); P(gw-3,fr,HSL(350,70,68));
+  }
+  if(state==='sick'){
+    for(let i=0;i<5;i++) P(2+Math.floor(rng()*(gw-4)), Math.floor(gh*0.5+rng()*gh*0.3), HSL(95,65,46));
+    const rise=Math.floor(clock/220)%3;
+    for(let i=0;i<3;i++) P(Math.floor(gw/2)-1+i, -1-i-rise, HSL(95,55,56));
+  }
+  if(state==='old'){
+    for(let y=Math.floor(gh*0.45);y<gh;y++) P(gw, y, '#8a6a3a');
+  }
+  ctx.restore();
+}
+
+let globalSeed=Math.floor(Math.random()*1e9);
+let pawns=[];
+function facingFor(seed){
+  const m=document.getElementById('facing').value;
+  if(m==='right') return 1;
+  if(m==='left') return -1;
+  return (seed%2) ? 1 : -1;
+}
+function render(){
+  const stage=document.getElementById('stage');
+  const count=+document.getElementById('count').value;
+  stage.innerHTML=''; pawns=[];
+  Object.keys(RACES).forEach((key,ri)=>{
+    const R=RACES[key];
+    const block=document.createElement('div'); block.className='race-block';
+    block.innerHTML=`<div class="race-head"><span class="race-name">${R.name}</span>
+      <span class="race-tag">${R.tag}</span></div>`;
+    const row=document.createElement('div'); row.className='row';
+    for(let i=0;i<count;i++){
+      const seed=(globalSeed+ri*9973+i*131)>>>0;
+      const cell=document.createElement('div'); cell.className='pawn';
+      const cv=document.createElement('canvas');
+      const id=document.createElement('div'); id.className='id';
+      id.textContent='#'+(seed%10000).toString().padStart(4,'0');
+      cell.appendChild(cv); cell.appendChild(id); row.appendChild(cell);
+      const f=facingFor(seed);
+      cv.style.cursor='pointer'; cv.title='点击导出此小人为 PNG';
+      cv.onclick=()=>exportOne(key,seed,f);
+      pawns.push({canvas:cv, race:key, seed, facing:f});
+    }
+    block.appendChild(row); stage.appendChild(block);
+  });
+  paint();
+}
+function paint(){
+  const state=document.getElementById('state').value;
+  const motion=document.getElementById('motion').value;
+  const anim=document.getElementById('anim').checked;
+  const clock=anim ? Date.now() : 0;
+  pawns.forEach(p=> drawPixelPawn(p.canvas,p.race,p.seed,state,p.facing,clock,motion));
+}
+
+function downloadCanvas(canvas, filename){
+  const a=document.createElement('a');
+  a.download=filename; a.href=canvas.toDataURL('image/png'); a.click();
+}
+function exportOne(race, seed, facing){            // 单个小人：4×放大、透明背景
+  const state=document.getElementById('state').value;
+  const motion=document.getElementById('motion').value;
+  const tmp=document.createElement('canvas');
+  drawPixelPawn(tmp, race, seed, state, facing, Date.now(), motion);
+  const scale=4, cw=104, ch=132;
+  const out=document.createElement('canvas'); out.width=cw*scale; out.height=ch*scale;
+  const o=out.getContext('2d'); o.imageSmoothingEnabled=false;
+  o.drawImage(tmp, 0,0, cw*scale, ch*scale);
+  downloadCanvas(out, `${race}_${(seed%10000).toString().padStart(4,'0')}.png`);
+}
+function exportAll(){                                // 整屏合成一张 PNG
+  const state=document.getElementById('state').value;
+  const motion=document.getElementById('motion').value;
+  const clock=Date.now();
+  const races=Object.keys(RACES), count=+document.getElementById('count').value;
+  const cw=104, ch=132, pad=8, labelH=24;
+  const W=pad+count*(cw+pad), H=races.length*(labelH+ch+pad)+pad;
+  const big=document.createElement('canvas'); big.width=W; big.height=H;
+  const b=big.getContext('2d'); b.imageSmoothingEnabled=false;
+  b.fillStyle='#14161c'; b.fillRect(0,0,W,H);
+  let y=pad;
+  races.forEach((key,ri)=>{
+    b.fillStyle='#ff2442'; b.font='bold 15px sans-serif';
+    b.fillText(RACES[key].name, pad, y+16);
+    y+=labelH;
+    for(let i=0;i<count;i++){
+      const seed=(globalSeed+ri*9973+i*131)>>>0;
+      const tmp=document.createElement('canvas');
+      drawPixelPawn(tmp, key, seed, state, facingFor(seed), clock, motion);
+      b.drawImage(tmp, pad+i*(cw+pad), y, cw, ch);
+    }
+    y+=ch+pad;
+  });
+  downloadCanvas(big, `小人合集_${motion}_${state}.png`);
+}
+setInterval(()=>{ if(document.getElementById('anim').checked) paint(); }, 90);
+
+document.getElementById('regen').onclick=()=>{ globalSeed=Math.floor(Math.random()*1e9); render(); };
+document.getElementById('exportAll').onclick=exportAll;
+document.getElementById('state').onchange=paint;
+document.getElementById('motion').onchange=paint;
+document.getElementById('facing').onchange=render;
+document.getElementById('anim').onchange=paint;
+const cnt=document.getElementById('count');
+cnt.oninput=()=>{ document.getElementById('countVal').textContent=cnt.value; render(); };
+render();
+</script>
+</body>
+</html>

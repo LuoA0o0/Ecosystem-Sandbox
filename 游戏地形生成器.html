@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>游戏地形生成器 · 程序化 Biome 地图</title>
+<style>
+  :root{ --bg:#14161c; --card:#1e212b; --line:#2c3140; --txt:#e8eaf0; --sub:#9aa0b0; --red:#ff2442; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--txt);
+    font-family:"PingFang SC","Microsoft YaHei",sans-serif; padding:24px; }
+  h1{ font-size:22px; margin:0 0 4px; } h1 span{ color:var(--red); }
+  .desc{ color:var(--sub); font-size:13px; margin-bottom:16px; }
+  .controls{ display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:12px 16px; margin-bottom:16px; }
+  button,select{ background:#2a2f3d; color:var(--txt); border:1px solid var(--line);
+    border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer; }
+  button:hover{ border-color:var(--red); }
+  button.primary{ background:var(--red); border-color:var(--red); font-weight:600; }
+  label{ font-size:13px; color:var(--sub); display:flex; align-items:center; gap:6px; }
+  #map{ display:block; image-rendering:pixelated; border:1px solid var(--line);
+    border-radius:10px; max-width:100%; }
+  .legend{ display:flex; flex-wrap:wrap; gap:10px 18px; margin-top:14px;
+    background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 16px; }
+  .lg{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--sub); }
+  .sw{ width:14px; height:14px; border-radius:3px; border:1px solid #0006; }
+</style>
+</head>
+<body>
+  <h1>游戏地形生成器 · <span>程序化 Biome 地图</span></h1>
+  <div class="desc">噪声生成海拔/湿度/温度 → 映射 Biome → 流淌河流 → 按偏好放置四族定居点。地形即生态舞台 + 玩家画笔。</div>
+
+  <div class="controls">
+    <button class="primary" id="regen">🎲 重新生成</button>
+    <label>地图类型
+      <select id="mapType">
+        <option value="continent">大陆</option>
+        <option value="islands">群岛</option>
+        <option value="basin">盆地/内海</option>
+        <option value="pangaea">超大陆</option>
+      </select>
+    </label>
+    <label>显示
+      <select id="view">
+        <option value="biome">Biome 地貌</option>
+        <option value="elevation">海拔灰度</option>
+        <option value="moisture">湿度</option>
+        <option value="temp">温度</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="rivers" checked> 河流</label>
+    <label><input type="checkbox" id="settle" checked> 种族定居点</label>
+    <button id="exportMap">📥 导出地图</button>
+  </div>
+
+  <canvas id="map"></canvas>
+
+  <div class="legend" id="legend"></div>
+
+<script>
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0;
+  let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t;
+  return ((t^t>>>14)>>>0)/4294967296; }; }
+
+// ---------- 值噪声 + fbm ----------
+function ihash(x,y,s){
+  let h=Math.imul(x|0,374761393) + Math.imul(y|0,668265263) + Math.imul(s|0,1442695041);
+  h=Math.imul(h^(h>>>13),1274126177);
+  return ((h^(h>>>16))>>>0)/4294967296;
+}
+function vnoise(x,y,s){
+  const x0=Math.floor(x), y0=Math.floor(y), fx=x-x0, fy=y-y0;
+  const a=ihash(x0,y0,s), b=ihash(x0+1,y0,s), c=ihash(x0,y0+1,s), d=ihash(x0+1,y0+1,s);
+  const sx=fx*fx*(3-2*fx), sy=fy*fy*(3-2*fy);
+  return a+(b-a)*sx+(c-a)*sy+(a-b-c+d)*sx*sy;
+}
+function fbm(x,y,s){
+  let amp=0.5,f=1,sum=0;
+  for(let o=0;o<5;o++){ sum+=amp*vnoise(x*f,y*f,s+o*131); amp*=0.5; f*=2; }
+  return sum;
+}
+
+// ---------- Biome 定义 ----------
+const BIO = {
+  DEEPSEA:{c:'#13314e', name:'深海'},
+  SEA:    {c:'#2c5f93', name:'浅海'},
+  BEACH:  {c:'#d9cd8f', name:'海岸'},
+  DESERT: {c:'#d7b76a', name:'荒漠'},
+  GRASS:  {c:'#8fb84e', name:'草原(游牧)'},
+  PLAIN:  {c:'#a8c062', name:'平原'},
+  FOREST: {c:'#3f7d3a', name:'森林(精灵)'},
+  SWAMP:  {c:'#46604a', name:'沼泽(鳄鱼)'},
+  HILL:   {c:'#9a8f76', name:'丘陵'},
+  MOUNT:  {c:'#857f78', name:'山地(矮人)'},
+  ROCK:   {c:'#6c6862', name:'高山'},
+  SNOW:   {c:'#e6ecf1', name:'雪峰/苔原'},
+  RIVER:  {c:'#3f93cf', name:'河流'},
+  VOLCANO:{c:'#a83a2c', name:'火山'},
+};
+const RACECOL = {
+  forest:{c:'#2ee27a', name:'精灵(森林族)'},
+  dwarf: {c:'#e0b23a', name:'矮人(矮人族)'},
+  nomad: {c:'#ef6b2a', name:'人马(游牧族)'},
+  marsh: {c:'#34c0ae', name:'鳄鱼(沼泽族)'},
+};
+const PREF = { forest:['FOREST'], dwarf:['MOUNT','HILL'], nomad:['GRASS','PLAIN'], marsh:['SWAMP'] };
+
+const W=140, H=80, CELL=7;
+let seed=Math.floor(Math.random()*1e9);
+let elev=[], moist=[], temp=[], biome=[], river=[];
+
+function biomeOf(e,m,t){
+  if(e<0.34) return 'DEEPSEA';
+  if(e<0.40) return 'SEA';
+  if(e<0.435) return 'BEACH';
+  if(e>0.90) return t<0.32 ? 'SNOW' : 'ROCK';
+  if(e>0.78) return 'MOUNT';
+  if(e>0.70) return 'HILL';
+  if(t<0.26) return 'SNOW';
+  if(e<0.50 && m>0.66) return 'SWAMP';
+  if(m<0.24) return 'DESERT';
+  if(m<0.46) return 'GRASS';
+  if(m<0.68) return 'PLAIN';
+  return 'FOREST';
+}
+
+function generate(){
+  const mapType=document.getElementById('mapType').value;
+  elev=[]; moist=[]; temp=[]; biome=[]; river=new Array(W*H).fill(0);
+  for(let j=0;j<H;j++) for(let i=0;i<W;i++){
+    const nx=i/W*4.2, ny=j/H*4.2;
+    let e=fbm(nx,ny,seed);
+    const m=Math.max(0,Math.min(1,fbm(nx+11,ny+7,seed+777)));
+    const dx=i/W-0.5, dy=j/H-0.5, d=Math.min(1,Math.sqrt(dx*dx+dy*dy)*1.6);
+    if(mapType==='continent') e = e - d*0.55 + 0.12;
+    else if(mapType==='islands') e = e*1.15 - 0.22;
+    else if(mapType==='basin') e = e + (d-0.5)*0.55;
+    else if(mapType==='pangaea') e = e - d*0.30 + 0.18;
+    e=Math.max(0,Math.min(1,e));
+    let t = 1 - Math.abs(j/H-0.5)*1.45 - e*0.35;
+    t=Math.max(0,Math.min(1,t));
+    const idx=j*W+i;
+    elev[idx]=e; moist[idx]=m; temp[idx]=t; biome[idx]=biomeOf(e,m,t);
+  }
+  // 火山：少量高海拔点
+  const rng=mulberry32(seed^0x9e37);
+  let volc=0;
+  for(let k=0;k<400 && volc<3;k++){
+    const i=Math.floor(rng()*W), j=Math.floor(rng()*H), idx=j*W+i;
+    if(elev[idx]>0.82){ biome[idx]='VOLCANO'; volc++; }
+  }
+  generateRivers();
+}
+
+function generateRivers(){
+  river.fill(0);
+  if(!document.getElementById('rivers').checked) return;
+  const rng=mulberry32(seed^0x5151);
+  const starts=Math.floor(W*H/700)+6;
+  for(let s=0;s<starts;s++){
+    let i=Math.floor(rng()*W), j=Math.floor(rng()*H);
+    if(elev[j*W+i]<0.62) { s--; if(s<-20) break; continue; }
+    for(let step=0;step<220;step++){
+      const idx=j*W+i;
+      if(elev[idx]<0.40) break;            // 入海
+      river[idx]=1;
+      // 找最低邻格
+      let bi=i,bj=j,be=elev[idx];
+      for(let dj=-1;dj<=1;dj++) for(let di=-1;di<=1;di++){
+        const ni=i+di,nj=j+dj; if(ni<0||nj<0||ni>=W||nj>=H) continue;
+        const e=elev[nj*W+ni]; if(e<be){ be=e; bi=ni; bj=nj; }
+      }
+      if(bi===i && bj===j) break;          // 洼地
+      i=bi; j=bj;
+    }
+  }
+}
+
+function placeSettlements(){
+  const out=[];
+  if(!document.getElementById('settle').checked) return out;
+  const rng=mulberry32(seed^0x7abc);
+  Object.keys(PREF).forEach(race=>{
+    const cand=[];
+    for(let idx=0;idx<W*H;idx++){
+      if(river[idx]) continue;
+      if(PREF[race].includes(biome[idx])) cand.push(idx);
+    }
+    // 随机抽样定居点
+    const n=Math.min(8, Math.max(2, Math.floor(cand.length/40)));
+    for(let k=0;k<n && cand.length;k++){
+      const p=cand[Math.floor(rng()*cand.length)];
+      out.push({race, i:p%W, j:Math.floor(p/W)});
+    }
+  });
+  return out;
+}
+
+function shade(hex,f){ // f<1 变暗
+  const n=parseInt(hex.slice(1),16);
+  let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  r=Math.round(r*f); g=Math.round(g*f); b=Math.round(b*f);
+  return `rgb(${r},${g},${b})`;
+}
+
+function render(){
+  const cv=document.getElementById('map');
+  const dpr=window.devicePixelRatio||1;
+  cv.width=W*CELL*dpr; cv.height=H*CELL*dpr;
+  cv.style.width=(W*CELL)+'px'; cv.style.height=(H*CELL)+'px';
+  const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr); ctx.imageSmoothingEnabled=false;
+  const view=document.getElementById('view').value;
+  for(let j=0;j<H;j++) for(let i=0;i<W;i++){
+    const idx=j*W+i; let col;
+    if(view==='elevation'){ const v=Math.round(elev[idx]*255); col=`rgb(${v},${v},${v})`; }
+    else if(view==='moisture'){ const v=Math.round(moist[idx]*255); col=`rgb(${Math.round(v*0.4)},${Math.round(v*0.6)},${v})`; }
+    else if(view==='temp'){ const v=temp[idx]; col=`rgb(${Math.round(40+v*215)},${Math.round(80*(1-Math.abs(v-0.5)*2))},${Math.round(40+(1-v)*215)})`; }
+    else {
+      col = river[idx] ? BIO.RIVER.c : BIO[biome[idx]].c;
+      // 海拔微阴影增强立体感
+      if(!river[idx]){ const e=elev[idx]; col=shade(BIO[biome[idx]].c, 0.82+e*0.28); }
+    }
+    ctx.fillStyle=col; ctx.fillRect(i*CELL, j*CELL, CELL, CELL);
+  }
+  if(view==='biome'){
+    placeSettlements().forEach(s=>{
+      ctx.fillStyle='#000'; ctx.fillRect(s.i*CELL-1, s.j*CELL-1, CELL+2, CELL+2);
+      ctx.fillStyle=RACECOL[s.race].c; ctx.fillRect(s.i*CELL, s.j*CELL, CELL, CELL);
+    });
+  }
+}
+
+function buildLegend(){
+  const wrap=document.getElementById('legend'); wrap.innerHTML='';
+  const items=[...Object.values(BIO), ...Object.values(RACECOL).map(r=>({c:r.c,name:'▣ '+r.name}))];
+  items.forEach(it=>{
+    const d=document.createElement('div'); d.className='lg';
+    d.innerHTML=`<span class="sw" style="background:${it.c}"></span>${it.name}`;
+    wrap.appendChild(d);
+  });
+}
+
+function full(){ generate(); render(); }
+document.getElementById('regen').onclick=()=>{ seed=Math.floor(Math.random()*1e9); full(); };
+document.getElementById('mapType').onchange=full;
+document.getElementById('rivers').onchange=full;
+document.getElementById('settle').onchange=render;
+document.getElementById('view').onchange=render;
+document.getElementById('exportMap').onclick=()=>{
+  render();
+  const a=document.createElement('a');
+  a.download=`地图_${document.getElementById('mapType').value}_${seed%10000}.png`;
+  a.href=document.getElementById('map').toDataURL('image/png'); a.click();
+};
+buildLegend(); full();
+</script>
+</body>
+</html>
