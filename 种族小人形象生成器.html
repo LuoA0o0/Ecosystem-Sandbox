@@ -73,7 +73,7 @@
   <div id="stage"></div>
 
   <div class="legend">
-    锚点原型：森林族＝<b>精灵</b>(尖耳·叶冠·修长高挑) · 矮人族＝<b>矮人</b>(大胡·矿盔·矮小敦实) · 游牧族＝<b>人马</b>(上人下马·四蹄对角步) · 沼泽族＝<b>鳄鱼</b>(长吻利齿·背刺·拖尾)。<br>
+    锚点原型：森林族＝<b>精灵</b>(尖耳·叶冠·修长高挑) · 矮人族＝<b>矮人</b>(大胡·矿盔·矮小敦实) · 游牧族＝<b>人马</b>(上人下马·四蹄对角步) · 海妖族＝<b>海妖</b>(鳍冠·鳞身·触手尾) · 人类＝<b>人类</b>(金发·战衣·全能适应)。<br>
     动作：待机(呼吸/眨眼/尾摆) · 行走(腿臂交替+踱步) · 跑步(更快更大幅度+前压) · 攻击(挥臂出击+冲击特效) · 死亡(绕脚底倒地+灵魂飘出)。状态：饥饿暗淡/年老白发拄杖/感染绿斑冒泡/愉悦腮红。<br>
     导出：点「📥 导出全部」存当前整屏为一张 PNG；<b>点击任意小人</b>可单独导出该小人(4×放大、透明背景)。
   </div>
@@ -152,22 +152,41 @@ const NOMAD=[   // 人马 W20 · 上人下马·四蹄
 "    F  G    G  F    ",
 "    F  G    G  F    ",
 ];
-const MARSH=[   // 鳄鱼 W18 · 长吻利齿·背刺·拖尾
-"     A A A A      ",
-"    SSSSSSS       ",
-"    SSSSSSS       ",
-"    SSSSSSSSSSSWWW ",
-"    SESSSSSSSSSSWW ",
-"    SSSSSSS       ",
-"   ASSSSSSSA      ",
-"   CCCCCCCCC      ",
-"BBBCCCCCCCCC      ",
-"BB CLLLLLLLC      ",
-"  JCCCCCCCCCK     ",
-"   CCCCCCCCC      ",
-"    CC   CC       ",
-"     F   G        ",
-"    FF   GG       ",
+const SEA=[   // 海妖 W16 · 鳍冠·鳞身·触手尾
+"      A A A     ",
+"     AAAAAAA    ",
+"       HHH      ",
+"      HHHHH     ",
+"     HHHHHHH    ",
+"    SEHHHHHES   ",
+"    SSSSSSSS    ",
+"     SSSSSS     ",
+"    CCCCCCCC    ",
+"   CCCCCCCCCC   ",
+"   CCAAAAAACC   ",
+"  JCCCCCCCCCK   ",
+"   CCCCCCCCCC   ",
+"    B      B    ",
+"    F      G    ",
+"    F      G    ",
+"   FF      GG   ",
+];
+
+const HUMAN=[   // 人类 W14 · 金发·战衣·全能
+"     DDDDD     ",
+"     DHHHD     ",
+"     HHHHH     ",
+"     SEHES     ",
+"     SSSSS     ",
+"      SSS      ",
+"    CCCCCCC    ",
+"   CCCCCCCCC   ",
+"   JCCAAAACCK  ",
+"   CCCCCCCCC   ",
+"    CC   CC    ",
+"     F   G     ",
+"     F   G     ",
+"    FF   GG    ",
 ];
 
 const RACES = {
@@ -177,8 +196,10 @@ const RACES = {
     skin:[28,40,62], hair:[18,38,30], cloth:[210,16,46], accent:[48,90,56], second:[210,16,40] },
   nomad:{ name:'游牧族', tag:'人马 · 上人下马 · 四蹄对角步', pat:NOMAD, leg:'B',
     skin:[28,45,58], hair:[20,35,24], cloth:[14,58,46], accent:[44,55,52], second:[28,44,38] },
-  marsh:{ name:'沼泽族', tag:'鳄鱼 · 长吻利齿 · 背刺拖尾', pat:MARSH, leg:'S',
-    skin:[112,42,42], hair:[150,20,25], cloth:[150,35,30], accent:[120,55,26], second:[112,42,40], belly:[70,45,60] },
+  sea:{ name:'海妖族', tag:'海妖 · 鳍冠鳞身 · 触手尾', pat:SEA, leg:'S',
+    skin:[190,55,45], hair:[180,70,65], cloth:[200,45,30], accent:[170,80,60], second:[195,50,40] },
+  human:{ name:'人类', tag:'人类 · 金发战衣 · 全能适应', pat:HUMAN, leg:'S',
+    skin:[28,38,64], hair:[45,85,55], cloth:[45,90,52], accent:[48,95,60], second:[42,80,35] },
 };
 
 function norm(p){ const w=Math.max(...p.map(s=>s.length)); return p.map(s=>s.padEnd(w,' ')); }

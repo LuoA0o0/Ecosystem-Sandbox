@@ -108,8 +108,8 @@ const BIO={
   HILL:'#9a8f76', MOUNT:'#857f78', ROCK:'#6c6862', SNOW:'#e6ecf1', RIVER:'#3f93cf', VOLCANO:'#a83a2c'
 };
 // 四族适宜栖息 biome
-const HAB={ forest:['FOREST','PLAIN'], dwarf:['MOUNT','HILL'], nomad:['GRASS','PLAIN'], marsh:['SWAMP','BEACH'] };
-const RACE_NAME={ forest:'精灵(森林族)', dwarf:'矮人(矮人族)', nomad:'人马(游牧族)', marsh:'鳄鱼(沼泽族)' };
+const HAB={ forest:['FOREST','PLAIN'], dwarf:['MOUNT','HILL'], nomad:['GRASS','PLAIN'], sea:['SWAMP','BEACH'], human:['PLAIN','GRASS','FOREST'] };
+const RACE_NAME={ forest:'精灵(森林族)', dwarf:'矮人(矮人族)', nomad:'人马(游牧族)', sea:'海妖(海妖族)', human:'人类' };
 
 const W=96, H=54, CELL=13;
 let seed=Math.floor(Math.random()*1e9);
@@ -118,11 +118,11 @@ const bg=document.createElement('canvas'); bg.width=W*CELL; bg.height=H*CELL;
 const terrCv=document.createElement('canvas'); terrCv.width=W*CELL; terrCv.height=H*CELL;
 let terr=new Array(W*H).fill(0), settlements=[], popHistory=[];
 const MAX_HIST=300;
-let eventLog=[], prevPop={forest:0,dwarf:0,nomad:0,marsh:0};
+let eventLog=[], prevPop={forest:0,dwarf:0,nomad:0,sea:0,human:0};
 let gameOver=false;
 const MAX_EVENTS=15;
-const RACE_IDX={forest:1,dwarf:2,nomad:3,marsh:4};
-const TERR_COL=['','#00e676','#ff9100','#ff1744','#00b0ff'];
+const RACE_IDX={forest:1,dwarf:2,nomad:3,sea:4,human:5};
+const TERR_COL=['','#00e676','#ff9100','#ff1744','#00b0ff','#ffea00'];
 let power='rain', brushR=2, hoverI=-1, hoverJ=-1, painting=false;
 
 function biomeOf(e,m,t){
@@ -190,11 +190,12 @@ let KCAP={};
 function newAgent(race,i,j){
   return {race, seed:Math.floor(Math.random()*1000), x:i+0.5, y:j+0.5,
     homeI:i, homeJ:j, tx:i+0.5, ty:j+0.5, facing:1, moving:false, rest:Math.random()*80,
-    age:Math.random()*800, hunger:0, plague:0, fight:0};
+    age:Math.random()*800, hunger:0, plague:0, fight:0,
+    rank:0, xp:0, kills:0, streak:0, lastKillFrame:0, hasHeroKill:false};
 }
 function initAgents(){
   const count=+document.getElementById('count').value;
-  agents=[]; KCAP={}; settlements=[]; popHistory=[]; eventLog=[]; prevPop={forest:0,dwarf:0,nomad:0,marsh:0}; gameOver=false; renderEventLog();
+  agents=[]; KCAP={}; settlements=[]; popHistory=[]; eventLog=[]; prevPop={forest:0,dwarf:0,nomad:0,sea:0,human:0}; gameOver=false; renderEventLog();
   Object.keys(HAB).forEach(race=>{
     const tiles=[];
     for(let j=0;j<H;j++)for(let i=0;i<W;i++){ const idx=j*W+i;
@@ -225,9 +226,10 @@ const RACE_PARAMS={
   forest:{r:0.030, maxAge:2600},
   dwarf: {r:0.016, maxAge:3200},
   nomad: {r:0.022, maxAge:2400},
-  marsh: {r:0.040, maxAge:2000},
+  sea:   {r:0.040, maxAge:2000},
+  human: {r:0.028, maxAge:2800},
 };
-const RACE_COL={ forest:'#00e676', dwarf:'#ff9100', nomad:'#ff1744', marsh:'#00b0ff' };
+const RACE_COL={ forest:'#00e676', dwarf:'#ff9100', nomad:'#ff1744', sea:'#00b0ff', human:'#ffea00' };
 const ECO_INTERVAL=18;
 function spawnNear(a){
   for(let k=0;k<6;k++){
@@ -240,7 +242,7 @@ function spawnNear(a){
   return null;
 }
 function ecoTick(){
-  const pop={forest:0,dwarf:0,nomad:0,marsh:0};
+  const pop={forest:0,dwarf:0,nomad:0,sea:0,human:0};
   for(const a of agents) pop[a.race]++;
   const TOTAL_CAP=650, newborns=[];
   for(let idx=agents.length-1; idx>=0; idx--){
@@ -261,7 +263,8 @@ function ecoTick(){
           settleBonus=1+0.12*s.level; break;
         }
       }
-      const rEff=P.r*(1-n/K)*settleBonus;
+      const rankPenalty=1-a.rank*0.08;
+      const rEff=P.r*(1-n/K)*settleBonus*rankPenalty;
       if(rEff>0 && Math.random()<rEff*ECO_INTERVAL*0.14){
         const baby=spawnNear(a); if(baby){ newborns.push(baby); pop[a.race]++; }
       }
@@ -289,9 +292,9 @@ function maybePlague(){
   }
 }
 function updateHud(){
-  const pop={forest:0,dwarf:0,nomad:0,marsh:0};
+  const pop={forest:0,dwarf:0,nomad:0,sea:0,human:0};
   for(const a of agents) pop[a.race]++;
-  const sc={forest:0,dwarf:0,nomad:0,marsh:0};
+  const sc={forest:0,dwarf:0,nomad:0,sea:0,human:0};
   for(const s of settlements) sc[s.race]++;
   document.getElementById('hud').innerHTML='总人口 <b>'+agents.length+'</b> ｜ '+
     Object.keys(pop).map(r=>`<span style="color:${RACE_COL[r]}">${RACE_NAME[r]} ${pop[r]}/${KCAP[r]||'-'} 🏠${sc[r]}</span>`).join(' · ');
@@ -305,7 +308,7 @@ function flashMsg(t){
 // ---------- 领地与扩张 ----------
 function decayTerritory(){
   // 收集当前每个种族小人所在的格子
-  const has={forest:new Set(),dwarf:new Set(),nomad:new Set(),marsh:new Set()};
+  const has={forest:new Set(),dwarf:new Set(),nomad:new Set(),sea:new Set(),human:new Set()};
   for(const a of agents){
     const i=Math.round(a.x), j=Math.round(a.y);
     has[a.race].add(j*W+i);
@@ -364,7 +367,7 @@ function findFrontier(race){                   // 找未被本族占据的适宜
   return null;
 }
 function expansion(){                           // 人口压力→派开拓者
-  const pop={forest:0,dwarf:0,nomad:0,marsh:0};
+  const pop={forest:0,dwarf:0,nomad:0,sea:0,human:0};
   for(const a of agents) pop[a.race]++;
   Object.keys(HAB).forEach(race=>{
     const K=KCAP[race]||10, n=pop[race];
@@ -378,12 +381,60 @@ function expansion(){                           // 人口压力→派开拓者
 }
 
 // ---------- 侵略 / 战争 ----------
-const STR={ forest:1.0, dwarf:1.5, nomad:1.2, marsh:0.8 };   // 各族战力
+const STR={ forest:1.0, dwarf:1.5, nomad:1.2, sea:0.8, human:1.1 };   // 各族战力
+
+// ---------- 等级晋升系统 ----------
+const RACE_RANK_NAMES={
+  forest:['嫩芽','游侠','古树守卫','翡翠君王'],
+  dwarf: ['学徒','锻铁者','战争领主','山王'],
+  nomad: ['幼驹','风行者','战蹄酋长','草原霸主'],
+  sea:   ['幼体','深潜者','潮汐领主','潮汐之母'],
+  human: ['民兵','骑士','军团长','至高统帅']
+};
+const RANK_MULT=[1.0,1.4,1.9,2.6];
+const RANK_XP_NEED=[0,3,8,15];
+const KILL_XP_BASE=[[1,2,5,10],[1,1,3,6],[1,1,1,3],[1,1,1,1]];
+const RANK_LIMIT_PCT=[1.0,0.50,0.15,0.03];
+
+function getKillXP(wRank,lRank,lRace){ return Math.round(KILL_XP_BASE[wRank][lRank]*Math.max(0.5,STR[lRace])); }
+function getRankCount(race,rank){ let c=0; for(const a of agents) if(a.race===race&&a.rank===rank) c++; return c; }
+function getRacePop(race){ let c=0; for(const a of agents) if(a.race===race) c++; return c; }
+function canPromote(a){
+  const next=a.rank+1; if(next>=4) return false;
+  const pop=getRacePop(a.race);
+  if(next===3){
+    if(getRankCount(a.race,3)>=1) return false;
+    if(!a.hasHeroKill) return false;
+    let hasL2=false; for(const s of settlements) if(s.race===a.race&&s.level>=2){ hasL2=true; break; }
+    if(!hasL2) return false;
+  }
+  if(next===2){ const limit=Math.max(1,Math.floor(pop*RANK_LIMIT_PCT[2])); if(getRankCount(a.race,2)>=limit) return false; }
+  if(next===1){ const limit=Math.max(1,Math.floor(pop*RANK_LIMIT_PCT[1])); if(getRankCount(a.race,1)>=limit) return false; }
+  return a.xp>=RANK_XP_NEED[next];
+}
+
 function combatTick(){
   const grid=new Map();
   for(const a of agents){ const k=Math.round(a.x)+'_'+Math.round(a.y);
     let l=grid.get(k); if(!l){ l=[]; grid.set(k,l); } l.push(a); }
   const dead=new Set(); let kills=0;
+  // 预计算光环
+  const auraBonus=new Map();
+  for(const a of agents){
+    let bonus=1.0;
+    const ci=Math.round(a.x), cj=Math.round(a.y);
+    for(let dj=-2;dj<=2;dj++)for(let di=-2;di<=2;di++){
+      const l=grid.get((ci+di)+'_'+(cj+dj)); if(!l) continue;
+      for(const ally of l){
+        if(ally.race===a.race && ally!==a){
+          const d=Math.hypot(a.x-ally.x,a.y-ally.y);
+          if(ally.rank>=3 && d<3){ bonus=Math.max(bonus,1.15); }
+          else if(ally.rank>=2 && d<2){ bonus=Math.max(bonus,1.08); }
+        }
+      }
+    }
+    auraBonus.set(a, bonus);
+  }
   for(const a of agents){
     if(dead.has(a)) continue;
     const ci=Math.round(a.x), cj=Math.round(a.y);
@@ -394,23 +445,51 @@ function combatTick(){
         if(b===a||dead.has(b)||b.race===a.race) continue;
         if(Math.hypot(a.x-b.x,a.y-b.y)<1.1 && Math.random()<0.35){
           a.fight=8; b.fight=8;
-          const sa=STR[a.race]*(0.5+Math.random()), sb=STR[b.race]*(0.5+Math.random());
-          if(sa>=sb) dead.add(b); else dead.add(a);
+          const sa=STR[a.race]*RANK_MULT[a.rank]*(0.5+Math.random())*(auraBonus.get(a)||1);
+          const sb=STR[b.race]*RANK_MULT[b.rank]*(0.5+Math.random())*(auraBonus.get(b)||1);
+          let winner, loser;
+          if(sa>=sb){ dead.add(b); winner=a; loser=b; }
+          else { dead.add(a); winner=b; loser=a; }
+          // 经验与连斩
+          winner.kills++;
+          if(loser.rank>=2) winner.hasHeroKill=true;
+          const now=frame;
+          if(now-winner.lastKillFrame<=30) winner.streak++; else winner.streak=1;
+          winner.lastKillFrame=now;
+          let xpGain=getKillXP(winner.rank, loser.rank, loser.race);
+          if(winner.streak>=2) xpGain=Math.round(xpGain*(winner.streak>=4?2.0:(winner.streak>=3?1.6:1.3)));
+          winner.xp+=xpGain;
+          // 升级判定
+          const oldRank=winner.rank;
+          while(canPromote(winner)){ winner.xp-=RANK_XP_NEED[winner.rank+1]; winner.rank++; }
+          if(winner.rank>oldRank){
+            const rname=RACE_RANK_NAMES[winner.race][winner.rank];
+            flashMsg('⭐ '+RACE_NAME[winner.race]+' 晋升'+rname+'！');
+            pushEvent('milestone',RACE_NAME[winner.race]+' 晋升'+rname);
+          }
+          if(winner.streak>=3){
+            const rname=RACE_RANK_NAMES[winner.race][winner.rank];
+            flashMsg('🔥 '+RACE_NAME[winner.race]+rname+' 连斩'+winner.streak+'人！');
+            pushEvent('warning',RACE_NAME[winner.race]+rname+' 连斩'+winner.streak+'人');
+          }
           // 聚落战损
           for(const st of settlements){
-            const dx=(st.i+0.5)-a.x, dy=(st.j+0.5)-a.y;
-            if(dx*dx+dy*dy<2.5){
-              const winner=sa>=sb?a:b;
-              if(winner.race!==st.race){
-                st.hp-=35+Math.floor(Math.random()*30);
-                if(st.hp<=0){ flashMsg('💥 '+RACE_NAME[st.race]+' 的聚落被攻陷！'); pushEvent('warning',RACE_NAME[st.race]+' 的聚落被攻陷'); }
-              }
+            const dx=(st.i+0.5)-winner.x, dy=(st.j+0.5)-winner.y;
+            if(dx*dx+dy*dy<2.5 && winner.race!==st.race){
+              let dmg=35+Math.floor(Math.random()*30);
+              if(winner.rank>=2) dmg=Math.round(dmg*(1+winner.rank*0.25));
+              st.hp-=dmg;
+              if(st.hp<=0){ flashMsg('💥 '+RACE_NAME[st.race]+' 的聚落被攻陷！'); pushEvent('warning',RACE_NAME[st.race]+' 的聚落被攻陷'); }
             }
           }
           kills++; done=true; break;
         }
       }
     }
+  }
+  for(const d of dead){
+    if(d.rank>=3){ pushEvent('warning',RACE_NAME[d.race]+' '+RACE_RANK_NAMES[d.race][3]+' 陨落！'); }
+    else if(d.rank>=2){ pushEvent('warning',RACE_NAME[d.race]+' '+RACE_RANK_NAMES[d.race][2]+' 阵亡'); }
   }
   if(dead.size){ agents=agents.filter(x=>!dead.has(x)); }
   if(kills>=4){ flashMsg('⚔️ 领地交战！'+kills+' 人阵亡'); pushEvent('warning','领地交战，'+kills+' 人阵亡'); }
@@ -493,7 +572,7 @@ function drawChart(){
   if(popHistory.length<2) return;
   let maxP=650;
   for(const h of popHistory){
-    const total=h.pop.forest+h.pop.dwarf+h.pop.nomad+h.pop.marsh;
+    const total=h.pop.forest+h.pop.dwarf+h.pop.nomad+h.pop.sea+h.pop.human;
     if(total>maxP) maxP=total;
   }
   maxP=Math.ceil(maxP/50)*50;
@@ -509,7 +588,7 @@ function drawChart(){
     c.fillText(''+Math.round(maxP*(1-i/5)),pad.left-8,y);
   }
   // 折线 + 末端标签
-  const races=['forest','dwarf','nomad','marsh'];
+  const races=['forest','dwarf','nomad','sea','human'];
   races.forEach(race=>{
     c.strokeStyle=RACE_COL[race]; c.lineWidth=2.5; c.lineJoin='round';
     c.beginPath();
@@ -551,7 +630,7 @@ function renderEventLog(){
 }
 function checkVictory(){
   if(gameOver) return;
-  const pop={forest:0,dwarf:0,nomad:0,marsh:0};
+  const pop={forest:0,dwarf:0,nomad:0,sea:0,human:0};
   for(const a of agents) pop[a.race]++;
   // 灭绝检查（只记录事件，不结束游戏）
   for(const race of Object.keys(HAB)){
@@ -591,7 +670,7 @@ function showGameOver(race,pop){
     '<div>👥 剩余人口 <b>'+total+'</b></div>'+
     '<div>🏠 聚落总数 <b>'+settlements.length+'</b></div>'+
     '</div><div style="margin-top:10px;color:var(--sub);">'+
-    '精灵 '+pop.forest+' · 矮人 '+pop.dwarf+' · 人马 '+pop.nomad+' · 鳄鱼 '+pop.marsh+
+    '精灵 '+pop.forest+' · 矮人 '+pop.dwarf+' · 人马 '+pop.nomad+' · 海妖 '+pop.sea+' · 人类 '+pop.human+
     '</div>';
   modal.style.display='flex';
 }
@@ -666,12 +745,25 @@ function drawAgent(ctx,a){
       R(-7,-6+bob,2,2,mc);                        // 马尾(后)
       R(-1,-10+bob,3,4,'#ff5252');                // 人上身
       R(-1,-12+bob,2,2,'#ff5252'); break; }       // 头
-    case 'marsh':{ const bc='#00b0ff';
-      R(-3,-2-(step===0?1:0),2,2,'#0091ea'); R(1,-2-(step===1?1:0),2,2,'#0091ea');
-      R(-7,-4+bob,4,2,bc);                        // 尾(后)
-      R(-3,-5+bob,6,3,bc);                        // 身
-      R(2,-5+bob,3,2,bc);                         // 头(前)
-      R(4,-5+bob,2,1,'#01579b'); break; }         // 长吻
+    case 'sea':{ const bc='#00b0ff';
+      R(-3,-2-(step===0?1:0),2,3,bc); R(1,-2-(step===1?1:0),2,3,bc);
+      R(-4,-8+bob,3,2,bc);                          // 鳍冠
+      R(-3,-6+bob,6,3,bc);                          // 头
+      R(-3,-3+bob,6,4,'#0091ea');                   // 鳞身
+      break; }
+    case 'human':{ const hc='#ffea00';
+      R(-3,-3-(step===0?1:0),2,3,hc); R(1,-3-(step===1?1:0),2,3,hc);
+      R(-3,-7+bob,6,4,hc);                          // 身
+      R(-2,-10+bob,4,3,hc);                         // 头
+      R(-3,-11+bob,6,1,'#ffd600');                  // 金发
+      break; }
+  }
+  // 等级标识
+  if(a.rank>=1){
+    const rbob=bob;
+    if(a.rank===1){ ctx.fillStyle='#ffd700'; ctx.fillRect(-2,-18+rbob,4,1); }
+    else if(a.rank===2){ ctx.fillStyle='#ffd700'; ctx.fillRect(-1,-19+rbob,2,2); }
+    else if(a.rank===3){ ctx.fillStyle='#ffd700'; ctx.fillRect(-3,-20+rbob,6,2); ctx.fillStyle='#ffea00'; ctx.fillRect(-2,-21+rbob,4,1); }
   }
   if(a.plague>0){ ctx.fillStyle='#d23b30'; ctx.fillRect(-1,-15,2,2); }  // 瘟疫标记
   if(a.hunger>70){ ctx.fillStyle='#e0b020'; ctx.fillRect(2,-13,1.5,1.5); } // 饥饿标记
@@ -730,7 +822,7 @@ function buildLegend(){
   const items=[
     ['#3f7d3a','森林'],['#8fb84e','草原'],['#46604a','沼泽'],['#857f78','山地'],
     ['#d7b76a','荒漠'],['#e6ecf1','雪原'],['#2c5f93','海'],['#3f93cf','河流'],
-    ['#00e676','▣ 精灵'],['#ff9100','▣ 矮人'],['#ff1744','▣ 人马'],['#00b0ff','▣ 鳄鱼'],['#e8eaf0','🏠 聚落'],
+    ['#00e676','▣ 精灵'],['#ff9100','▣ 矮人'],['#ff1744','▣ 人马'],['#00b0ff','▣ 海妖'],['#ffea00','▣ 人类'],['#e8eaf0','🏠 聚落'],
   ];
   items.forEach(([c,n])=>{ const d=document.createElement('div'); d.className='lg';
     d.innerHTML=`<span class="sw" style="background:${c}"></span>${n}`; wrap.appendChild(d); });
@@ -761,7 +853,7 @@ buildLegend(); rebuild(); tick();
 document.getElementById('modalRestart').onclick=()=>{
   document.getElementById('modal').style.display='none';
   gameOver=false;
-  prevPop={forest:0,dwarf:0,nomad:0,marsh:0};
+  prevPop={forest:0,dwarf:0,nomad:0,sea:0,human:0};
   eventLog=[];
   renderEventLog();
   seed=Math.floor(Math.random()*1e9);
