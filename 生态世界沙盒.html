@@ -563,29 +563,74 @@ function combatTick(){
 
 // ---------- BOSS系统 ----------
 function createWorldBoss(){
-  const candidates=[];
+  const cx=W/2, cy=H/2;
+  const maxD=Math.min(W,H)*0.35;  // 中心附近35%范围
+  let candidates=[];
+  // 优先：中心附近的陆地危险地带
   for(let j=0;j<H;j++)for(let i=0;i<W;i++){
     const idx=j*W+i;
-    if(['DEEPSEA','SEA','SNOW','ROCK','VOLCANO'].includes(biome[idx])) candidates.push([i,j]);
+    const d=Math.hypot(i-cx, j-cy);
+    if(d<maxD && ['SNOW','ROCK','VOLCANO','MOUNT','HILL'].includes(biome[idx])){
+      candidates.push([i,j,d]);
+    }
+  }
+  // fallback：全图陆地危险地带
+  if(candidates.length===0){
+    for(let j=0;j<H;j++)for(let i=0;i<W;i++){
+      const idx=j*W+i;
+      if(['SNOW','ROCK','VOLCANO','MOUNT','HILL'].includes(biome[idx])){
+        candidates.push([i,j,Math.hypot(i-cx,j-cy)]);
+      }
+    }
   }
   if(candidates.length===0) return null;
-  const [i,j]=candidates[Math.floor(Math.random()*candidates.length)];
+  // 按距离中心排序，取前50%较近的，再随机一个
+  candidates.sort((a,b)=>a[2]-b[2]);
+  const pool=candidates.slice(0, Math.max(1, Math.floor(candidates.length*0.5)));
+  const [i,j]=pool[Math.floor(Math.random()*pool.length)];
   return { type:'world', x:i+0.5, y:j+0.5, hp:WORLD_BOSS_HP, maxHp:WORLD_BOSS_HP, lastAttack:0 };
 }
 function createRaceBoss(race){
+  // 优先：生成在该族人口最密集的格子
+  const raceAgents=agents.filter(a=>a.race===race);
+  if(raceAgents.length>=3){
+    const posCount=new Map();
+    let bestKey=null, bestCount=0;
+    for(const a of raceAgents){
+      const i=Math.round(a.x), j=Math.round(a.y);
+      const key=i+'_'+j;
+      const c=(posCount.get(key)||0)+1;
+      posCount.set(key,c);
+      if(c>bestCount){ bestCount=c; bestKey=[i,j]; }
+    }
+    if(bestKey && bestCount>=3){
+      const [i,j]=bestKey;
+      return { type:'race', race, x:i+0.5, y:j+0.5, hp:RACE_BOSS_HP, maxHp:RACE_BOSS_HP, active:false };
+    }
+  }
+  // Fallback：栖息地内部+大后方
   const primary=HAB[race][0];
-  let candidates=[];
-  for(let j=0;j<H;j++)for(let i=0;i<W;i++){ const idx=j*W+i; if(biome[idx]===primary) candidates.push([i,j]); }
-  if(candidates.length===0){
-    for(let j=0;j<H;j++)for(let i=0;i<W;i++){ const idx=j*W+i; if(HAB[race].includes(biome[idx])) candidates.push([i,j]); }
+  let tiles=[];
+  for(let j=0;j<H;j++)for(let i=0;i<W;i++){ if(biome[j*W+i]===primary) tiles.push([i,j]); }
+  if(tiles.length===0){
+    for(let j=0;j<H;j++)for(let i=0;i<W;i++){ if(HAB[race].includes(biome[j*W+i])) tiles.push([i,j]); }
   }
-  if(candidates.length===0) return null;
-  let best=null, bestScore=-1;
-  for(const [i,j] of candidates){
-    const score=Math.hypot(i-W/2, j-H/2);
-    if(score>bestScore){ bestScore=score; best=[i,j]; }
-  }
-  const [i,j]=best;
+  if(tiles.length===0) return null;
+  const cx=W/2, cy=H/2;
+  const interior=tiles.filter(([i,j])=>{
+    let same=0;
+    for(let dj=-1;dj<=1;dj++)for(let di=-1;di<=1;di++){
+      if(di===0&&dj===0) continue;
+      const ni=i+di, nj=j+dj;
+      if(ni<0||nj<0||ni>=W||nj>=H) continue;
+      if(biome[nj*W+ni]===primary) same++;
+    }
+    return same>=6;
+  });
+  const pool=interior.length>0?interior:tiles;
+  pool.sort((a,b)=>Math.hypot(b[0]-cx,b[1]-cy)-Math.hypot(a[0]-cx,a[1]-cy));
+  const top=pool.slice(0, Math.max(1, Math.floor(pool.length*0.3)));
+  const [i,j]=top[Math.floor(Math.random()*top.length)];
   return { type:'race', race, x:i+0.5, y:j+0.5, hp:RACE_BOSS_HP, maxHp:RACE_BOSS_HP, active:false };
 }
 function damageBoss(boss, attacker){
