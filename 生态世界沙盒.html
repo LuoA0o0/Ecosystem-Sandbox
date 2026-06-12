@@ -46,6 +46,8 @@
     <label>速度 <input type="range" id="speed" min="1" max="6" value="3"><span id="speedVal">3</span></label>
     <label><input type="checkbox" id="rivers" checked> 河流</label>
     <label><input type="checkbox" id="terr" checked> 领地</label>
+    <label><input type="checkbox" id="border"> 边界线</label>
+    <span style="font-size:12px;color:var(--sub)">按 B 切换</span>
     <label><input type="checkbox" id="pause"> 暂停</label>
   </div>
 
@@ -108,7 +110,7 @@ const BIO={
   HILL:'#9a8f76', MOUNT:'#857f78', ROCK:'#6c6862', SNOW:'#e6ecf1', RIVER:'#3f93cf', VOLCANO:'#a83a2c'
 };
 // 四族适宜栖息 biome
-const HAB={ forest:['FOREST','PLAIN'], dwarf:['MOUNT','HILL'], nomad:['GRASS','PLAIN'], sea:['SWAMP','BEACH'], human:['PLAIN','GRASS','FOREST'] };
+const HAB={ forest:['FOREST','PLAIN'], dwarf:['MOUNT','HILL'], nomad:['GRASS','PLAIN'], sea:['SWAMP','BEACH'], human:['PLAIN','GRASS'] };
 const RACE_NAME={ forest:'精灵(森林族)', dwarf:'矮人(矮人族)', nomad:'人马(游牧族)', sea:'海妖(海妖族)', human:'人类' };
 
 const W=96, H=54, CELL=13;
@@ -117,13 +119,16 @@ let elev=[], moist=[], temp=[], biome=[], river=[], agents=[], frame=0;
 const bg=document.createElement('canvas'); bg.width=W*CELL; bg.height=H*CELL;
 const terrCv=document.createElement('canvas'); terrCv.width=W*CELL; terrCv.height=H*CELL;
 let terr=new Array(W*H).fill(0), settlements=[], popHistory=[];
+// BOSS系统
+let worldBoss=null, raceBosses={}, worldBossKillCount=0, nextWorldBossFrame=3600;
+let worldBuff=null, activeArtifacts={};
 const MAX_HIST=300;
 let eventLog=[], prevPop={forest:0,dwarf:0,nomad:0,sea:0,human:0};
 let gameOver=false;
 const MAX_EVENTS=15;
 const RACE_IDX={forest:1,dwarf:2,nomad:3,sea:4,human:5};
 const TERR_COL=['','#00e676','#ff9100','#ff1744','#00b0ff','#ffea00'];
-let power='rain', brushR=2, hoverI=-1, hoverJ=-1, painting=false;
+let power='rain', brushR=2, hoverI=-1, hoverJ=-1, painting=false, showBorder=false;
 
 function biomeOf(e,m,t){
   if(e<0.34) return 'DEEPSEA';
@@ -191,7 +196,8 @@ function newAgent(race,i,j){
   return {race, seed:Math.floor(Math.random()*1000), x:i+0.5, y:j+0.5,
     homeI:i, homeJ:j, tx:i+0.5, ty:j+0.5, facing:1, moving:false, rest:Math.random()*80,
     age:Math.random()*800, hunger:0, plague:0, fight:0,
-    rank:0, xp:0, kills:0, streak:0, lastKillFrame:0, hasHeroKill:false};
+    rank:0, xp:0, kills:0, streak:0, lastKillFrame:0, hasHeroKill:false,
+    _bossKill:false};
 }
 function initAgents(){
   const count=+document.getElementById('count').value;
@@ -200,7 +206,8 @@ function initAgents(){
     const tiles=[];
     for(let j=0;j<H;j++)for(let i=0;i<W;i++){ const idx=j*W+i;
       if(!river[idx] && HAB[race].includes(biome[idx])) tiles.push([i,j]); }
-    KCAP[race]=Math.max(4, Math.floor(tiles.length*0.5));   // 栖息地承载力 K
+    const KCAP_MULT={ forest:0.5, dwarf:0.7, nomad:0.5, sea:0.5, human:0.5 };
+    KCAP[race]=Math.max(4, Math.floor(tiles.length*KCAP_MULT[race]));   // 栖息地承载力 K
     const n=Math.min(count, tiles.length);
     for(let k=0;k<n;k++){
       const [i,j]=tiles[Math.floor(Math.random()*tiles.length)];
@@ -223,11 +230,11 @@ function pickTarget(a){
 
 // ---------- 人口动态 ----------
 const RACE_PARAMS={
-  forest:{r:0.030, maxAge:2600},
-  dwarf: {r:0.016, maxAge:3200},
-  nomad: {r:0.022, maxAge:2400},
+  forest:{r:0.028, maxAge:2600},
+  dwarf: {r:0.020, maxAge:3200},
+  nomad: {r:0.020, maxAge:2400},
   sea:   {r:0.040, maxAge:2000},
-  human: {r:0.028, maxAge:2800},
+  human: {r:0.025, maxAge:2800},
 };
 const RACE_COL={ forest:'#00e676', dwarf:'#ff9100', nomad:'#ff1744', sea:'#00b0ff', human:'#ffea00' };
 const ECO_INTERVAL=18;
@@ -296,8 +303,14 @@ function updateHud(){
   for(const a of agents) pop[a.race]++;
   const sc={forest:0,dwarf:0,nomad:0,sea:0,human:0};
   for(const s of settlements) sc[s.race]++;
+  let bossInfo='';
+  if(worldBuff) bossInfo+=` ｜ 世界意志:${RACE_NAME[worldBuff.race]} ${Math.ceil((worldBuff.endFrame-frame)/60)}s`;
+  for(const race of Object.keys(activeArtifacts)){
+    const art=activeArtifacts[race];
+    bossInfo+=` ｜ ${RACE_NAME[race]}:${ARTIFACTS[art.key].name} ${Math.ceil((art.endFrame-frame)/60)}s`;
+  }
   document.getElementById('hud').innerHTML='总人口 <b>'+agents.length+'</b> ｜ '+
-    Object.keys(pop).map(r=>`<span style="color:${RACE_COL[r]}">${RACE_NAME[r]} ${pop[r]}/${KCAP[r]||'-'} 🏠${sc[r]}</span>`).join(' · ');
+    Object.keys(pop).map(r=>`<span style="color:${RACE_COL[r]}">${RACE_NAME[r]} ${pop[r]}/${KCAP[r]||'-'} 🏠${sc[r]}</span>`).join(' · ')+bossInfo;
 }
 let msgTimer=null;
 function flashMsg(t){
@@ -336,23 +349,25 @@ function renderTerritory(){
     const v=terr[j*W+i]; if(!v) continue;
     t.fillStyle=TERR_COL[v]; t.fillRect(i*CELL,j*CELL,CELL,CELL);
   }
-  // 2. 边界线高亮（新增）
-  t.globalAlpha=0.90;
-  t.lineWidth=2;
-  for(let j=0;j<H;j++)for(let i=0;i<W;i++){
-    const v=terr[j*W+i]; if(!v) continue;
-    const x=i*CELL, y=j*CELL;
-    const up    = (j-1>=0) ? terr[(j-1)*W+i] : 0;
-    const down  = (j+1<H)  ? terr[(j+1)*W+i] : 0;
-    const left  = (i-1>=0) ? terr[j*W+(i-1)] : 0;
-    const right = (i+1<W)  ? terr[j*W+(i+1)] : 0;
-    t.strokeStyle=TERR_COL[v];
-    t.beginPath();
-    if(!up    || up!==v)   { t.moveTo(x,y);       t.lineTo(x+CELL,y);       }
-    if(!down  || down!==v) { t.moveTo(x,y+CELL);  t.lineTo(x+CELL,y+CELL);  }
-    if(!left  || left!==v) { t.moveTo(x,y);       t.lineTo(x,y+CELL);       }
-    if(!right || right!==v){ t.moveTo(x+CELL,y);  t.lineTo(x+CELL,y+CELL);  }
-    t.stroke();
+  // 2. 边界线高亮（可选，默认隐藏）
+  if(showBorder){
+    t.globalAlpha=0.90;
+    t.lineWidth=2;
+    for(let j=0;j<H;j++)for(let i=0;i<W;i++){
+      const v=terr[j*W+i]; if(!v) continue;
+      const x=i*CELL, y=j*CELL;
+      const up    = (j-1>=0) ? terr[(j-1)*W+i] : 0;
+      const down  = (j+1<H)  ? terr[(j+1)*W+i] : 0;
+      const left  = (i-1>=0) ? terr[j*W+(i-1)] : 0;
+      const right = (i+1<W)  ? terr[j*W+(i+1)] : 0;
+      t.strokeStyle=TERR_COL[v];
+      t.beginPath();
+      if(!up    || up!==v)   { t.moveTo(x,y);       t.lineTo(x+CELL,y);       }
+      if(!down  || down!==v) { t.moveTo(x,y+CELL);  t.lineTo(x+CELL,y+CELL);  }
+      if(!left  || left!==v) { t.moveTo(x,y);       t.lineTo(x,y+CELL);       }
+      if(!right || right!==v){ t.moveTo(x+CELL,y);  t.lineTo(x+CELL,y+CELL);  }
+      t.stroke();
+    }
   }
   t.globalAlpha=1;
 }
@@ -381,7 +396,25 @@ function expansion(){                           // 人口压力→派开拓者
 }
 
 // ---------- 侵略 / 战争 ----------
-const STR={ forest:1.0, dwarf:1.5, nomad:1.2, sea:0.8, human:1.1 };   // 各族战力
+const STR={ forest:1.0, dwarf:1.5, nomad:1.1, sea:0.8, human:1.0 };   // 各族战力
+
+// 主场优势：在适宜栖息地内战斗时的战力加成
+const HOME_BONUS={ forest:1.20, dwarf:1.25, nomad:1.15, sea:1.15, human:1.05 };
+
+// ---------- BOSS系统 ----------
+const MAX_WORLD_BOSS=2;                 // 每局最多2次世界BOSS
+const WORLD_BOSS_INTERVAL=5400;         // 世界BOSS间隔 90秒@60fps
+const WORLD_BOSS_HP=300;
+const RACE_BOSS_HP=150;
+const RACE_BOSS_RESPAWN=7200;           // 种族BOSS重生 120秒
+const ARTIFACT_DURATION=5400;           // 神器持续 90秒
+const ARTIFACTS={
+  forest:{ name:'翡翠之弓', effect:'range', value:1.0 },   // 攻击范围+1格
+  dwarf: { name:'山王战锤', effect:'siege', value:1.0 },   // 对聚落伤害+100%
+  nomad: { name:'风之蹄',   effect:'speed', value:0.5 },   // 移动速度+50%
+  sea:   { name:'潮汐宝珠', effect:'home',  value:0.4 },   // 水域/沼泽战斗+40%
+  human: { name:'王权剑',   effect:'xp',    value:1.0 }    // 经验翻倍
+};
 
 // ---------- 等级晋升系统 ----------
 const RACE_RANK_NAMES={
@@ -435,18 +468,47 @@ function combatTick(){
     }
     auraBonus.set(a, bonus);
   }
+  // 预计算世界BUFF/神器加成
+  const buffBonus=new Map();
+  for(const a of agents){
+    let bonus=1.0;
+    if(worldBuff && worldBuff.race===a.race && frame<worldBuff.endFrame) bonus*=1.25;
+    const art=activeArtifacts[a.race];
+    if(art && frame<art.endFrame && ARTIFACTS[art.key].effect==='home'){
+      const idx=Math.round(a.y)*W+Math.round(a.x);
+      if(['SWAMP','BEACH','SEA','DEEPSEA'].includes(biome[idx])) bonus*=1.4;
+    }
+    buffBonus.set(a, bonus);
+  }
   for(const a of agents){
     if(dead.has(a)) continue;
     const ci=Math.round(a.x), cj=Math.round(a.y);
     let done=false;
+    // 先检查与世界BOSS/种族BOSS战斗
+    if(worldBoss && Math.hypot(a.x-worldBoss.x,a.y-worldBoss.y)<1.5){
+      a.fight=8; damageBoss(worldBoss,a); done=true;
+    }
+    if(!done){
+      for(const br of Object.keys(raceBosses)){
+        const boss=raceBosses[br];
+        if(!boss || boss.dead || boss.race===a.race) continue;
+        if(Math.hypot(a.x-boss.x,a.y-boss.y)<1.5){ a.fight=8; boss.active=true; damageBoss(boss,a); done=true; break; }
+      }
+    }
     for(let dj=-1;dj<=1 && !done;dj++)for(let di=-1;di<=1 && !done;di++){
       const l=grid.get((ci+di)+'_'+(cj+dj)); if(!l) continue;
       for(const b of l){
         if(b===a||dead.has(b)||b.race===a.race) continue;
-        if(Math.hypot(a.x-b.x,a.y-b.y)<1.1 && Math.random()<0.35){
+        let attackRange=1.1;
+        const aArt=activeArtifacts[a.race];
+        if(aArt && frame<aArt.endFrame && ARTIFACTS[aArt.key].effect==='range') attackRange=2.1;
+        if(Math.hypot(a.x-b.x,a.y-b.y)<attackRange && Math.random()<0.35){
           a.fight=8; b.fight=8;
-          const sa=STR[a.race]*RANK_MULT[a.rank]*(0.5+Math.random())*(auraBonus.get(a)||1);
-          const sb=STR[b.race]*RANK_MULT[b.rank]*(0.5+Math.random())*(auraBonus.get(b)||1);
+          const idxA=Math.round(a.y)*W+Math.round(a.x), idxB=Math.round(b.y)*W+Math.round(b.x);
+          const homeA=HAB[a.race].includes(biome[idxA])?HOME_BONUS[a.race]:1.0;
+          const homeB=HAB[b.race].includes(biome[idxB])?HOME_BONUS[b.race]:1.0;
+          const sa=STR[a.race]*RANK_MULT[a.rank]*(0.5+Math.random())*(auraBonus.get(a)||1)*homeA*(buffBonus.get(a)||1);
+          const sb=STR[b.race]*RANK_MULT[b.rank]*(0.5+Math.random())*(auraBonus.get(b)||1)*homeB*(buffBonus.get(b)||1);
           let winner, loser;
           if(sa>=sb){ dead.add(b); winner=a; loser=b; }
           else { dead.add(a); winner=b; loser=a; }
@@ -457,6 +519,8 @@ function combatTick(){
           if(now-winner.lastKillFrame<=30) winner.streak++; else winner.streak=1;
           winner.lastKillFrame=now;
           let xpGain=getKillXP(winner.rank, loser.rank, loser.race);
+          const wArt=activeArtifacts[winner.race];
+          if(wArt && frame<wArt.endFrame && ARTIFACTS[wArt.key].effect==='xp') xpGain*=2;
           if(winner.streak>=2) xpGain=Math.round(xpGain*(winner.streak>=4?2.0:(winner.streak>=3?1.6:1.3)));
           winner.xp+=xpGain;
           // 升级判定
@@ -478,6 +542,8 @@ function combatTick(){
             if(dx*dx+dy*dy<2.5 && winner.race!==st.race){
               let dmg=35+Math.floor(Math.random()*30);
               if(winner.rank>=2) dmg=Math.round(dmg*(1+winner.rank*0.25));
+              const winnerArt=activeArtifacts[winner.race];
+              if(winnerArt && frame<winnerArt.endFrame && ARTIFACTS[winnerArt.key].effect==='siege') dmg*=2;
               st.hp-=dmg;
               if(st.hp<=0){ flashMsg('💥 '+RACE_NAME[st.race]+' 的聚落被攻陷！'); pushEvent('warning',RACE_NAME[st.race]+' 的聚落被攻陷'); }
             }
@@ -493,6 +559,125 @@ function combatTick(){
   }
   if(dead.size){ agents=agents.filter(x=>!dead.has(x)); }
   if(kills>=4){ flashMsg('⚔️ 领地交战！'+kills+' 人阵亡'); pushEvent('warning','领地交战，'+kills+' 人阵亡'); }
+}
+
+// ---------- BOSS系统 ----------
+function createWorldBoss(){
+  const candidates=[];
+  for(let j=0;j<H;j++)for(let i=0;i<W;i++){
+    const idx=j*W+i;
+    if(['DEEPSEA','SEA','SNOW','ROCK','VOLCANO'].includes(biome[idx])) candidates.push([i,j]);
+  }
+  if(candidates.length===0) return null;
+  const [i,j]=candidates[Math.floor(Math.random()*candidates.length)];
+  return { type:'world', x:i+0.5, y:j+0.5, hp:WORLD_BOSS_HP, maxHp:WORLD_BOSS_HP, lastAttack:0 };
+}
+function createRaceBoss(race){
+  const primary=HAB[race][0];
+  let candidates=[];
+  for(let j=0;j<H;j++)for(let i=0;i<W;i++){ const idx=j*W+i; if(biome[idx]===primary) candidates.push([i,j]); }
+  if(candidates.length===0){
+    for(let j=0;j<H;j++)for(let i=0;i<W;i++){ const idx=j*W+i; if(HAB[race].includes(biome[idx])) candidates.push([i,j]); }
+  }
+  if(candidates.length===0) return null;
+  let best=null, bestScore=-1;
+  for(const [i,j] of candidates){
+    const score=Math.hypot(i-W/2, j-H/2);
+    if(score>bestScore){ bestScore=score; best=[i,j]; }
+  }
+  const [i,j]=best;
+  return { type:'race', race, x:i+0.5, y:j+0.5, hp:RACE_BOSS_HP, maxHp:RACE_BOSS_HP, active:false };
+}
+function damageBoss(boss, attacker){
+  boss.hp-=Math.max(1, 1+attacker.rank);
+  if(boss.hp<=0){ boss.dead=true; onBossDefeated(boss, attacker.race); }
+}
+function onBossDefeated(boss, winnerRace){
+  if(boss.type==='world'){
+    worldBuff={ race:winnerRace, endFrame:frame+5400 };
+    worldBossKillCount++;
+    if(worldBossKillCount<MAX_WORLD_BOSS) nextWorldBossFrame=frame+WORLD_BOSS_INTERVAL;
+    pushEvent('milestone', RACE_NAME[winnerRace]+' 击败了深渊巨兽，获得世界意志！');
+    flashMsg('🏆 '+RACE_NAME[winnerRace]+' 获得世界意志buff！');
+    worldBoss=null;
+  } else {
+    const art=ARTIFACTS[boss.race];
+    activeArtifacts[winnerRace]={ key:boss.race, endFrame:frame+ARTIFACT_DURATION };
+    raceBosses[boss.race]={ dead:true, respawnFrame:frame+RACE_BOSS_RESPAWN };
+    pushEvent('milestone', RACE_NAME[winnerRace]+' 击败了'+RACE_NAME[boss.race]+'的守护神殿，夺得'+art.name+'！');
+    flashMsg('⚔️ '+RACE_NAME[winnerRace]+' 夺得'+art.name+'！');
+  }
+}
+function bossTick(){
+  // 世界BOSS生成
+  if(!worldBoss && worldBossKillCount<MAX_WORLD_BOSS && frame>=nextWorldBossFrame){
+    worldBoss=createWorldBoss();
+    if(worldBoss){ pushEvent('milestone','深渊巨兽降临世界！'); flashMsg('🐉 深渊巨兽降临！'); }
+  }
+  // 世界BOSS行为
+  if(worldBoss){
+    let target=null, minD=Infinity;
+    for(const a of agents){ const d=Math.hypot(a.x-worldBoss.x,a.y-worldBoss.y); if(d<minD){ minD=d; target=a; } }
+    if(target){
+      const speed=0.03;
+      const dx=target.x-worldBoss.x, dy=target.y-worldBoss.y;
+      const d=Math.hypot(dx,dy);
+      if(d>0.5){ worldBoss.x+=dx/d*speed; worldBoss.y+=dy/d*speed; }
+      if(d<2.5 && frame-worldBoss.lastAttack>15){
+        worldBoss.lastAttack=frame;
+        for(const a of agents) if(Math.hypot(a.x-worldBoss.x, a.y-worldBoss.y)<2.0) a._bossKill=true;
+      }
+    }
+  }
+  // 种族BOSS生成/重生
+  for(const race of Object.keys(HAB)){
+    if(!raceBosses[race] || raceBosses[race].dead){
+      if(!raceBosses[race] || frame>=raceBosses[race].respawnFrame){
+        raceBosses[race]=createRaceBoss(race);
+        if(raceBosses[race]) pushEvent('normal', RACE_NAME[race]+' 的守护神殿已苏醒');
+      }
+    }
+  }
+  // 种族BOSS行为
+  for(const race of Object.keys(raceBosses)){
+    const boss=raceBosses[race];
+    if(!boss || boss.dead) continue;
+    for(const a of agents){
+      if(a.race===race && Math.hypot(a.x-boss.x, a.y-boss.y)<2.0) boss.hp=Math.min(boss.maxHp, boss.hp+0.5);
+    }
+    if(boss.active || frame%30===0){
+      for(const a of agents){
+        if(a.race!==race && Math.hypot(a.x-boss.x, a.y-boss.y)<2.5){
+          boss.active=true;
+          if(a.rank<2 || Math.random()<0.5) a._bossKill=true;
+        }
+      }
+    }
+  }
+  if(agents.some(a=>a._bossKill)) agents=agents.filter(a=>!a._bossKill);
+  if(worldBuff && frame>=worldBuff.endFrame){ worldBuff=null; pushEvent('normal','世界意志buff已消散'); }
+  for(const race of Object.keys(activeArtifacts)){
+    if(frame>=activeArtifacts[race].endFrame){ delete activeArtifacts[race]; pushEvent('normal', RACE_NAME[race]+' 的神器力量已消散'); }
+  }
+}
+function drawBoss(ctx, boss){
+  const x=boss.x*CELL, y=boss.y*CELL;
+  ctx.save(); ctx.translate(x,y);
+  if(boss.type==='world'){
+    ctx.fillStyle='#8e24aa'; ctx.fillRect(-CELL, -CELL, CELL*2, CELL*2);
+    ctx.fillStyle='#fff'; ctx.fillRect(-CELL+3, -CELL+3, 5, 5); ctx.fillRect(CELL-8, -CELL+3, 5, 5);
+    ctx.fillStyle='#ff1744'; ctx.fillRect(-CELL+2, -CELL+8, CELL*2-4, 3);
+  } else {
+    const col=RACE_COL[boss.race];
+    ctx.fillStyle=col; ctx.fillRect(-CELL, -CELL, CELL*2, CELL*2);
+    ctx.fillStyle='#fff'; ctx.fillRect(-CELL+3, -CELL+3, 5, 5); ctx.fillRect(CELL-8, -CELL+3, 5, 5);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.strokeRect(-CELL+1, -CELL+1, CELL*2-2, CELL*2-2);
+  }
+  const hpPct=Math.max(0, boss.hp/boss.maxHp);
+  ctx.fillStyle='#222'; ctx.fillRect(-CELL, -CELL-8, CELL*2, 5);
+  ctx.fillStyle=hpPct>0.5?'#4caf50':hpPct>0.25?'#ff9800':'#f44336';
+  ctx.fillRect(-CELL, -CELL-8, CELL*2*hpPct, 5);
+  ctx.restore();
 }
 
 // ---------- 聚落系统 ----------
@@ -787,6 +972,9 @@ function draw(){
   for(const s of settlements) drawSettlement(ctx,s);
   agents.sort((a,b)=>a.y-b.y);                    // 远近遮挡
   agents.forEach(a=>drawAgent(ctx,a));
+  // BOSS绘制在最上层
+  if(worldBoss) drawBoss(ctx,worldBoss);
+  for(const race of Object.keys(raceBosses)){ const b=raceBosses[race]; if(b && !b.dead) drawBoss(ctx,b); }
   if(hoverI>=0 && hoverI<W){                       // 神力笔刷光标
     ctx.strokeStyle='rgba(255,255,255,0.75)'; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.arc((hoverI+0.5)*CELL,(hoverJ+0.5)*CELL,(brushR+0.5)*CELL,0,Math.PI*2); ctx.stroke();
@@ -794,15 +982,20 @@ function draw(){
 }
 function tick(){
   const paused=document.getElementById('pause').checked;
-  const sp=(+document.getElementById('speed').value)*0.018;
+  let sp=(+document.getElementById('speed').value)*0.018;
   if(!paused){
     frame++;
+    if(frame%10===0) bossTick();
     for(const a of agents){
       if(a.fight>0) a.fight--;
       if(a.rest>0){ a.rest--; a.moving=false; continue; }
       const dx=a.tx-a.x, dy=a.ty-a.y, dist=Math.hypot(dx,dy);
       if(dist<0.4){ a.moving=false; a.rest=30+Math.random()*90; pickTarget(a); }
-      else { a.x+=dx/dist*sp; a.y+=dy/dist*sp; a.facing=dx>=0?1:-1; a.moving=true; }
+      else {
+        let moveSp=sp;
+        if(activeArtifacts[a.race] && ARTIFACTS[activeArtifacts[a.race].key].effect==='speed') moveSp*=1.5;
+        a.x+=dx/dist*moveSp; a.y+=dy/dist*moveSp; a.facing=dx>=0?1:-1; a.moving=true;
+      }
       // 实时标记领地（持久化，异族覆盖）
       const ai=Math.round(a.x), aj=Math.round(a.y), ri=RACE_IDX[a.race];
       for(let tj=-1;tj<=1;tj++)for(let ti=-1;ti<=1;ti++){
@@ -828,7 +1021,12 @@ function buildLegend(){
     d.innerHTML=`<span class="sw" style="background:${c}"></span>${n}`; wrap.appendChild(d); });
 }
 
-function rebuild(){ generate(); initAgents(); }
+function rebuild(){
+  generate();
+  worldBoss=null; worldBossKillCount=0; nextWorldBossFrame=3600;
+  raceBosses={}; worldBuff=null; activeArtifacts={};
+  initAgents();
+}
 document.getElementById('regen').onclick=()=>{ seed=Math.floor(Math.random()*1e9); rebuild(); };
 document.getElementById('mapType').onchange=rebuild;
 document.getElementById('rivers').onchange=rebuild;
@@ -839,6 +1037,17 @@ document.querySelectorAll('.pw').forEach(b=>{ b.onclick=()=>{ power=b.dataset.p;
   document.querySelectorAll('.pw').forEach(x=>x.classList.remove('active')); b.classList.add('active'); }; });
 document.querySelector('.pw').classList.add('active');
 document.getElementById('brush').oninput=function(){ brushR=+this.value; document.getElementById('brushVal').textContent=this.value; };
+// 边界线开关
+const borderCb=document.getElementById('border');
+borderCb.onchange=function(){ showBorder=this.checked; renderTerritory(); };
+document.addEventListener('keydown', e=>{
+  if(e.key==='b' || e.key==='B'){
+    showBorder=!showBorder;
+    borderCb.checked=showBorder;
+    renderTerritory();
+    flashMsg(showBorder?'🔲 显示领地边界线':'🔲 隐藏领地边界线');
+  }
+});
 // 鼠标神力
 const wc=document.getElementById('world');
 function evtTile(e){ const r=wc.getBoundingClientRect();
